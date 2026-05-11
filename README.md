@@ -98,6 +98,8 @@ OpenBridge creates one local agent session per conversation. The Swift layer own
 
 Provider settings live in the app and support OAuth or API-key credentials. Model selection is filtered to enabled providers, and credentials are resolved at agent runtime before requests are forwarded to the real provider.
 
+OpenBridge supports provider brands across subscription, direct API, OpenAI-compatible, Anthropic-compatible, and gateway routes, including OpenAI, Anthropic, Google Gemini, Amazon Bedrock, Azure OpenAI, GitHub Copilot, DeepSeek, OpenRouter, xAI, Groq, Cerebras, Fireworks, Hugging Face, Mistral AI, Cloudflare AI Gateway, Cloudflare Workers AI, Vercel AI Gateway, Kimi, Moonshot AI, MiniMax, OpenCode, Xiaomi, Z.ai, and custom OpenAI-compatible endpoints.
+
 ### Skills
 
 Skills are local capability packages with a `SKILL.md` entry point. OpenBridge scans system, custom, imported, and synced skills, advertises active skills to the agent, and expects the agent to read matching `SKILL.md` files only when a task needs them.

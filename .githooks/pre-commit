@@ -22,41 +22,16 @@ fi
 
 echo "[pre-commit] Checking $(echo "$STAGED_SWIFT_FILES" | wc -l | tr -d ' ') staged Swift file(s)..."
 
-# Convert to absolute paths as array
-FILES_TO_CHECK=()
-while IFS= read -r file; do
-    if [[ -n "$file" ]]; then
-        FILES_TO_CHECK+=("$REPO_ROOT/$file")
-    fi
-done <<< "$STAGED_SWIFT_FILES"
+targets_file=$(mktemp "${TMPDIR:-/tmp}/openbridge-swift-lint-targets.XXXXXX")
+trap 'rm -f "$targets_file"' EXIT
+printf '%s\n' "$STAGED_SWIFT_FILES" | sed 's#^macos/##' > "$targets_file"
 
 cd "$MACOS_DIR"
 
-# Check if tools are installed
-if ! command -v swiftformat &>/dev/null; then
-    echo "[pre-commit] swiftformat not found. Install with: brew install swiftformat"
-    exit 1
-fi
-
-if ! command -v swiftlint &>/dev/null; then
-    echo "[pre-commit] swiftlint not found. Install with: brew install swiftlint"
-    exit 1
-fi
-
-# Run swiftformat in lint mode (check only, no changes)
-echo "[pre-commit] Running swiftformat..."
-if ! swiftformat --swiftversion 6.0 --lint "${FILES_TO_CHECK[@]}" 2>&1; then
+echo "[pre-commit] Running shared Swift lint script..."
+if ! SWIFT_LINT_TARGETS_FILE="$targets_file" DevKit/Scripts/swift_format_lint.sh --strict; then
     echo ""
-    echo "[pre-commit] ❌ swiftformat found issues. Run 'swiftformat <file>' to fix."
-    exit 1
-fi
-
-# Run swiftlint
-echo "[pre-commit] Running swiftlint..."
-SWIFTLINT_CONFIG="$MACOS_DIR/.swiftlint.yml"
-if ! swiftlint lint --config "$SWIFTLINT_CONFIG" --strict "${FILES_TO_CHECK[@]}" 2>&1; then
-    echo ""
-    echo "[pre-commit] ❌ swiftlint found issues. Please fix them before committing."
+    echo "[pre-commit] ❌ Swift code style checks failed."
     exit 1
 fi
 

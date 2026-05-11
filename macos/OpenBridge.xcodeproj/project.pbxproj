@@ -365,7 +365,7 @@
 				51C0C0E32F01000500C0DE05 /* XCLocalSwiftPackageReference "Frameworks/GlassEffectKit" */,
 				5B8D1C622F91A10000AA1101 /* XCLocalSwiftPackageReference "Frameworks/NotchKit" */,
 				5A1D9E7A3C4B5D6E7F8A9B10 /* XCLocalSwiftPackageReference "Frameworks/WindowNotificationKit" */,
-				51E8C0022FAB000000C0DE02 /* XCLocalSwiftPackageReference "Frameworks/KWWKComputerUseCore" */,
+				51E8C0022FAB000000C0DE02 /* XCRemoteSwiftPackageReference "kwwk-computer-use-core" */,
 				51D4A7002FA4000000D4A700 /* XCLocalSwiftPackageReference "../kwwk" */,
 				500446812F24B78A0086BB88 /* XCRemoteSwiftPackageReference "KeychainAccess" */,
 				50B0A1A22F31A00100ABCDE /* XCRemoteSwiftPackageReference "LRUCache" */,
@@ -1244,10 +1244,6 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../kwwk;
 		};
-		51E8C0022FAB000000C0DE02 /* XCLocalSwiftPackageReference "Frameworks/KWWKComputerUseCore" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = Frameworks/KWWKComputerUseCore;
-		};
 		5A1D9E7A3C4B5D6E7F8A9B10 /* XCLocalSwiftPackageReference "Frameworks/WindowNotificationKit" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Frameworks/WindowNotificationKit;
@@ -1373,6 +1369,14 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 1.6.4;
+			};
+		};
+		51E8C0022FAB000000C0DE02 /* XCRemoteSwiftPackageReference "kwwk-computer-use-core" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/EYHN/kwwk-computer-use-core.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.1.0;
 			};
 		};
 		E9FA07252EA8A45E0092CF4C /* XCRemoteSwiftPackageReference "LaunchAtLogin-Modern" */ = {
@@ -1504,7 +1508,7 @@
 		};
 		51E8C0032FAB000000C0DE03 /* KWWKComputerUseCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 51E8C0022FAB000000C0DE02 /* XCLocalSwiftPackageReference "Frameworks/KWWKComputerUseCore" */;
+			package = 51E8C0022FAB000000C0DE02 /* XCRemoteSwiftPackageReference "kwwk-computer-use-core" */;
 			productName = KWWKComputerUseCore;
 		};
 		5A1D9E7A3C4B5D6E7F8A9B11 /* WindowNotificationKit */ = {

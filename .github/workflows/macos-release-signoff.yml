@@ -26,6 +26,10 @@ jobs:
     steps:
       - name: Configure AWS CLI for R2
         run: |
+          CLOUDFLARE_R2_ACCESS_KEY_ID="$(printf "%s" "$CLOUDFLARE_R2_ACCESS_KEY_ID" | tr -d '\r\n')"
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY="$(printf "%s" "$CLOUDFLARE_R2_SECRET_ACCESS_KEY" | tr -d '\r\n')"
+          CLOUDFLARE_R2_BUCKET="$(printf "%s" "$CLOUDFLARE_R2_BUCKET" | tr -d '\r\n')"
+          R2_ENDPOINT="$(printf "%s" "$R2_ENDPOINT" | tr -d '\r\n')"
           aws configure set aws_access_key_id "$CLOUDFLARE_R2_ACCESS_KEY_ID"
           aws configure set aws_secret_access_key "$CLOUDFLARE_R2_SECRET_ACCESS_KEY"
           aws configure set region auto

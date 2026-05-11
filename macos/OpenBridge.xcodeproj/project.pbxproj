@@ -268,7 +268,6 @@
 				50C2FDA12E9DF71C00592D92 /* Resources */,
 				9DC400252EE0330B00BD9A1D /* Generate JSBridge Type Definition */,
 				5084C4ED2EAF986A007E5C50 /* Sign Sparkle */,
-				224AB9EB3CA743F1AE47FF8A /* Build and Embed BridgeComputerUse */,
 				504CB8982EFA295F0001090C /* Clean Extra Attribute for CodeSign */,
 			);
 			buildRules = (
@@ -408,26 +407,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		224AB9EB3CA743F1AE47FF8A /* Build and Embed BridgeComputerUse */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Build and Embed BridgeComputerUse";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "/bin/zsh \"${SRCROOT}/DevKit/Scripts/xcode_embed_bridge_computer_use.sh\"\n";
-			showEnvVarsInLog = 0;
-		};
 		504CB8982EFA295F0001090C /* Clean Extra Attribute for CodeSign */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;

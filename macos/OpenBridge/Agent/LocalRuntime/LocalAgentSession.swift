@@ -261,7 +261,6 @@ final class LocalAgentSession: Identifiable {
 
     @discardableResult
     func cancel() async -> Bool {
-        await ComputerUseSessionRegistry.shared.stopIfActive(sessionID: sessionID)
         cancelLocalPendingConfirmations(reason: "expired")
         computerUseClientStore.finishAndReset()
         localAgent?.abort()
@@ -473,7 +472,6 @@ final class LocalAgentSession: Identifiable {
         onSessionFinished?(lastFinishState ?? "completed", error?.localizedDescription)
         Task { [weak self] in
             guard let self else { return }
-            await ComputerUseSessionRegistry.shared.stopIfActive(sessionID: sessionID)
             await refreshWorkspaceState()
         }
     }
@@ -762,9 +760,6 @@ final class LocalAgentSession: Identifiable {
             onSessionFinished?(finished.state, finished.error)
             Task { [weak self] in
                 guard let self else { return }
-                if finished.state != "waiting" {
-                    await ComputerUseSessionRegistry.shared.stopIfActive(sessionID: sessionID)
-                }
                 await reconcileStoredMessages(reason: "session_finished")
                 await refreshWorkspaceState()
             }

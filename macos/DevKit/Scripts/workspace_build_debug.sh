@@ -33,6 +33,15 @@ function run_xcodebuild() {
   fi
 }
 
+function remove_legacy_helper_from_previous_build() {
+  local app="$DERIVED_DATA/Build/Products/$BUILD_CONFIGURATION/${SCHEME}.app"
+  local helper="$app/Contents/Helpers/OpenBridge Computer Use.app"
+  if [[ -d "$helper" ]]; then
+    echo "[*] removing legacy OpenBridge Computer Use helper from previous build"
+    rm -rf "$helper"
+  fi
+}
+
 function resign_unsigned_debug_app() {
   local app="$1"
   if [[ "$BUILD_CONFIGURATION" != Unsigned* && "${CODE_SIGNING_ALLOWED:-}" != "NO" ]]; then
@@ -55,6 +64,8 @@ function resign_unsigned_debug_app() {
 
 echo "[*] building $SCHEME in $BUILD_CONFIGURATION configuration"
 echo "[*] derived data: $DERIVED_DATA"
+
+remove_legacy_helper_from_previous_build
 
 run_xcodebuild \
   -workspace "$WORKSPACE" \

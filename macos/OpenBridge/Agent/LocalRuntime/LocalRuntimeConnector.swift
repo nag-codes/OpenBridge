@@ -578,13 +578,8 @@ final class LocalRuntimeConnector {
         }
     }
 
-    private static func localCapabilities(for environmentKind: EnvironmentKind) -> EnvironmentCapabilities {
-        switch environmentKind {
-        case .localMacOS:
-            EnvironmentCapabilities(computerUseTool: true)
-        case .localVM:
-            EnvironmentCapabilities(computerUseTool: false)
-        }
+    private static func localCapabilities(for _: EnvironmentKind) -> EnvironmentCapabilities {
+        EnvironmentCapabilities()
     }
 
     private static func activeSkills(_ skills: [Skill]) -> [Skill] {
@@ -671,8 +666,6 @@ final class LocalRuntimeConnector {
             await handleExecRequest(msg)
         case ConnectorMethod.requestPermission:
             await handleRequestPermission(msg)
-        case ConnectorMethod.computerUse:
-            await handleComputerUse(msg)
         default:
             await sendResponse(.error(id: msg.id, message: "unknown method: \(method)"))
         }

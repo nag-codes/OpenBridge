@@ -4,7 +4,7 @@ import Foundation
 import OSLog
 
 private let borderLogger = Logger(
-    subsystem: "app.afk.cueboard.BridgeComputerUse",
+    subsystem: "app.afk.openbridge.KWWKComputerUseCore",
     category: "BorderOverlay"
 )
 

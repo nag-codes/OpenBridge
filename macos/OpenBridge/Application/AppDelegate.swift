@@ -89,10 +89,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ChatAttachmentPreviewStore.clearAllPreviewDirectories()
         HeartbeatNotificationService.shared.shutdown()
         AgentSessionManager.shared.shutdown()
-        // Best-effort: tear the ComputerUse helper down so it doesn't linger
-        // after OpenBridge quits. Fire-and-forget; the OS reaps the helper if the
-        // control call times out.
-        ComputerUseDaemonClient.shared.requestShutdownSync()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {

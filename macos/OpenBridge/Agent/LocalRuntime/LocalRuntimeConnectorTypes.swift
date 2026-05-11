@@ -60,13 +60,7 @@ struct EnvironmentSkillMetadata: Codable, Equatable {
     let source: String
 }
 
-struct EnvironmentCapabilities: Codable, Equatable {
-    let computerUseTool: Bool
-
-    private enum CodingKeys: String, CodingKey {
-        case computerUseTool = "computer_use_tool"
-    }
-}
+struct EnvironmentCapabilities: Codable, Equatable {}
 
 /// Carries incremental output from exec and file streaming commands.
 struct ConnectorStreamData: Codable {
@@ -95,7 +89,6 @@ enum ConnectorMethod {
     static let grep = "grep"
     static let exec = "exec"
     static let requestPermission = "request_permission"
-    static let computerUse = "computer_use"
     static let readStream = "read_stream"
     static let writeStream = "write_stream"
 }

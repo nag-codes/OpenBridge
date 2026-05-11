@@ -4,7 +4,7 @@ import OSLog
 import QuartzCore
 
 private let metalLogger = Logger(
-    subsystem: "app.afk.cueboard.BridgeComputerUse",
+    subsystem: "app.afk.openbridge.KWWKComputerUseCore",
     category: "ColorfulBorderMetal"
 )
 

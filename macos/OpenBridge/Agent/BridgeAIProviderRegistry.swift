@@ -15,6 +15,16 @@ enum BridgeAIProviderRegistry {
         }
         await APIRegistry.shared.register(OpenAICompletionsProvider(defaultAPIKey: nil), sourceId: sourceId)
         await APIRegistry.shared.register(OpenAIResponsesProvider(defaultAPIKey: nil), sourceId: sourceId)
+        await APIRegistry.shared.register(BedrockProvider(
+            region: bedrockRegion(from: settings[.amazonBedrock]),
+            credentialsProvider: bedrockCredentials
+        ), sourceId: sourceId)
+        if let azureEndpoint = URL(string: settings[.azureOpenAIResponses].baseURL), azureEndpoint.host != nil {
+            await APIRegistry.shared.register(ProviderVariants.azureOpenAIResponses(
+                endpoint: azureEndpoint,
+                apiKey: nil
+            ), sourceId: sourceId)
+        }
         var openAIConfig = settings[.openAI]
         if openAIConfig.oauthAccountID == nil {
             let access = await BridgeAIProviderSecretStore.readSecret(for: .openAI, kind: .oauthAccessToken)
@@ -28,6 +38,7 @@ enum BridgeAIProviderRegistry {
             originator: "bridge"
         ), sourceId: sourceId)
         await APIRegistry.shared.register(GoogleGeminiProvider(defaultAPIKey: nil), sourceId: sourceId)
+        await registerGitHubCopilotProviders(settings: settings)
     }
 
     static func defaultModel() -> Model {
@@ -55,7 +66,10 @@ enum BridgeAIProviderRegistry {
     static func availableModels() -> [Model] {
         let supportedAPIs: Set = [
             "anthropic-messages",
+            "azure-openai-responses",
+            "bedrock-converse-stream",
             "google-generative-ai",
+            "mistral-conversations",
             "openai-codex-responses",
             "openai-completions",
             "openai-responses",
@@ -151,7 +165,27 @@ enum BridgeAIProviderRegistry {
         {
             return codexRuntimeModel(id: id)
         }
+        if provider == "mistral", catalogModel?.api == "mistral-conversations" {
+            return mistralRuntimeModel(catalogModel)
+        }
         return catalogModel
+    }
+
+    private static func mistralRuntimeModel(_ catalog: Model?) -> Model? {
+        guard let catalog else { return nil }
+        return Model(
+            id: catalog.id,
+            name: catalog.name,
+            api: "openai-completions",
+            provider: catalog.provider,
+            baseUrl: "https://api.mistral.ai/v1",
+            reasoning: catalog.reasoning,
+            input: catalog.input,
+            cost: catalog.cost,
+            contextWindow: catalog.contextWindow,
+            maxTokens: catalog.maxTokens,
+            headers: catalog.headers
+        )
     }
 
     private static func codexRuntimeModel(id: String) -> Model? {
@@ -181,12 +215,19 @@ enum BridgeAIProviderRegistry {
             .bearer
         case .apiKey:
             switch provider {
-            case .openAI, .openAIChatCompletions:
+            case .openAI, .openAIChatCompletions, .cerebras, .cloudflareAIGateway, .cloudflareWorkersAI, .deepSeek,
+                 .fireworks, .githubCopilot, .groq, .huggingFace, .kimiCoding, .minimax, .minimaxCN, .mistral,
+                 .moonshotAI, .moonshotAICN, .opencode, .opencodeGo, .openRouter, .vercelAIGateway, .xAI, .xiaomi,
+                 .zAI, .openAICompatible:
                 .bearer
             case .anthropic:
                 .apiKeyHeader(name: "x-api-key")
             case .googleGemini:
                 .queryKey(name: "key")
+            case .azureOpenAIResponses:
+                .apiKeyHeader(name: "api-key")
+            case .amazonBedrock:
+                .none
             }
         }
     }
@@ -234,9 +275,86 @@ enum BridgeAIProviderRegistry {
         if provider == .openAI {
             nextConfig.oauthAccountID = Self.openAIAccountID(fromJWT: refreshed.access)
         }
+        if provider == .githubCopilot, case let .string(endpoint) = refreshed.extras["endpoint"] ?? .null, !endpoint.isEmpty {
+            nextConfig.baseURL = endpoint
+        }
         settings[provider] = nextConfig
         try? await BridgeAIProviderSecretStore.saveSettings(settings)
         return refreshed.access
+    }
+
+    private static func registerGitHubCopilotProviders(settings: BridgeAIProviderSettings) async {
+        let baseURLString = settings[.githubCopilot].baseURL.isEmpty
+            ? BridgeAIProvider.githubCopilot.defaultBaseURL
+            : settings[.githubCopilot].baseURL
+        let baseURL = URL(string: baseURLString) ?? URL(string: BridgeAIProvider.githubCopilot.defaultBaseURL)!
+        await APIRegistry.shared.register(ProviderVariants.githubCopilot(
+            sessionToken: nil,
+            integrationID: "vscode-chat",
+            baseURL: baseURL
+        ), sourceId: sourceId)
+        await APIRegistry.shared.register(ProviderVariants.githubCopilotAnthropic(
+            sessionToken: nil,
+            integrationID: "vscode-chat",
+            baseURL: baseURL
+        ), sourceId: sourceId)
+        await APIRegistry.shared.register(ProviderVariants.githubCopilotResponses(
+            sessionToken: nil,
+            integrationID: "vscode-chat",
+            baseURL: baseURL
+        ), sourceId: sourceId)
+    }
+
+    private static func bedrockRegion(from config: BridgeAIProviderConfig) -> String {
+        let raw = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return "us-east-1" }
+        if let url = URL(string: raw), let host = url.host {
+            let prefix = "bedrock-runtime."
+            let suffix = ".amazonaws.com"
+            if host.hasPrefix(prefix), host.hasSuffix(suffix) {
+                let start = host.index(host.startIndex, offsetBy: prefix.count)
+                let end = host.index(host.endIndex, offsetBy: -suffix.count)
+                return String(host[start ..< end])
+            }
+        }
+        return raw
+    }
+
+    private static func bedrockCredentials() async -> AWSSigV4.Credentials? {
+        let stored = await BridgeAIProviderSecretStore.readSecret(for: .amazonBedrock, kind: .apiKey)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let credentials = parseBedrockCredentials(stored) {
+            return credentials
+        }
+        let env = ProcessInfo.processInfo.environment
+        guard let key = env["AWS_ACCESS_KEY_ID"], let secret = env["AWS_SECRET_ACCESS_KEY"] else { return nil }
+        return AWSSigV4.Credentials(
+            accessKeyId: key,
+            secretAccessKey: secret,
+            sessionToken: env["AWS_SESSION_TOKEN"]
+        )
+    }
+
+    private static func parseBedrockCredentials(_ raw: String) -> AWSSigV4.Credentials? {
+        guard !raw.isEmpty else { return nil }
+        if let data = raw.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let key = object["accessKeyId"] as? String ?? object["AWS_ACCESS_KEY_ID"] as? String,
+           let secret = object["secretAccessKey"] as? String ?? object["AWS_SECRET_ACCESS_KEY"] as? String
+        {
+            return AWSSigV4.Credentials(
+                accessKeyId: key,
+                secretAccessKey: secret,
+                sessionToken: object["sessionToken"] as? String ?? object["AWS_SESSION_TOKEN"] as? String
+            )
+        }
+        let parts = raw.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+        return AWSSigV4.Credentials(
+            accessKeyId: parts[0],
+            secretAccessKey: parts[1],
+            sessionToken: parts.dropFirst(2).first.flatMap { $0.isEmpty ? nil : $0 }
+        )
     }
 
     static func openAIAccountID(fromJWT token: String) -> String? {
@@ -270,7 +388,13 @@ enum BridgeAIProviderRegistry {
             nil
         case .anthropic:
             AnthropicOAuthProvider()
+        case .githubCopilot:
+            GitHubCopilotOAuthProvider()
         case .googleGemini:
+            nil
+        case .amazonBedrock, .azureOpenAIResponses, .cerebras, .cloudflareAIGateway, .cloudflareWorkersAI, .deepSeek,
+             .fireworks, .groq, .huggingFace, .kimiCoding, .minimax, .minimaxCN, .mistral, .moonshotAI, .moonshotAICN,
+             .opencode, .opencodeGo, .openRouter, .vercelAIGateway, .xAI, .xiaomi, .zAI, .openAICompatible:
             nil
         }
     }

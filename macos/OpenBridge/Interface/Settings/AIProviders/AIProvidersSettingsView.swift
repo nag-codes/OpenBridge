@@ -101,6 +101,7 @@ struct AIProvidersSettingsView: View {
                             AIProviderListRow(
                                 provider: provider,
                                 state: rowState(for: provider),
+                                showsUsage: showsUsage(for: provider),
                                 usage: usageSnapshot(for: provider)
                             )
                         }
@@ -186,6 +187,11 @@ struct AIProvidersSettingsView: View {
         )
     }
 
+    private func showsUsage(for provider: BridgeAIProvider) -> Bool {
+        let config = providerSettings[provider]
+        return rowState(for: provider).isConfigured && config.authMethod == .oauth
+    }
+
     private func rowState(for provider: BridgeAIProvider) -> AIProviderRowState {
         let config = providerSettings[provider]
         let hasSecret = configuredSecrets[provider] ?? false
@@ -208,6 +214,7 @@ struct AIProvidersSettingsView: View {
 private struct AIProviderListRow: View {
     let provider: BridgeAIProvider
     let state: AIProviderRowState
+    let showsUsage: Bool
     let usage: BridgeAIProviderUsageSnapshot
 
     @State private var isHovering = false
@@ -233,7 +240,7 @@ private struct AIProviderListRow: View {
 
             Spacer(minLength: 20)
 
-            if state.isConfigured {
+            if showsUsage {
                 HStack(spacing: 8) {
                     UsageBadge(
                         title: "5h",
@@ -432,6 +439,25 @@ extension BridgeAIProvider {
         case .openAI, .openAIChatCompletions: .green
         case .anthropic: .orange
         case .googleGemini: .blue
+        case .amazonBedrock: .orange
+        case .azureOpenAIResponses: .blue
+        case .cerebras: .red
+        case .cloudflareAIGateway, .cloudflareWorkersAI: .orange
+        case .deepSeek: .blue
+        case .fireworks: .red
+        case .githubCopilot: .purple
+        case .groq: .orange
+        case .huggingFace: .yellow
+        case .kimiCoding, .moonshotAI, .moonshotAICN: .indigo
+        case .minimax, .minimaxCN: .pink
+        case .mistral: .purple
+        case .opencode, .opencodeGo: .gray
+        case .openRouter: .cyan
+        case .vercelAIGateway: .black
+        case .xAI: .primary
+        case .xiaomi: .orange
+        case .zAI: .teal
+        case .openAICompatible: .secondary
         }
     }
 }

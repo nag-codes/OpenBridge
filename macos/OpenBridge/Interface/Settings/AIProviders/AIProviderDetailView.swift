@@ -36,7 +36,9 @@ struct AIProviderDetailView: View {
                     oauthSection
                 }
 
-                usageSection
+                if supportsUsageDisplay {
+                    usageSection
+                }
                 actionsSection
                 storageCard
             }
@@ -69,40 +71,44 @@ struct AIProviderDetailView: View {
                         .font(.callout.weight(.medium))
                         .foregroundStyle(statusColor)
 
-                    Divider()
-                        .frame(height: 16)
+                    if supportsUsageDisplay {
+                        Divider()
+                            .frame(height: 16)
 
-                    UsageBadge(
-                        title: "5h",
-                        value: usageSnapshot.label(for: .fiveHour),
-                        tone: usageSnapshot.tone(for: .fiveHour)
-                    )
-                    UsageBadge(
-                        title: "1w",
-                        value: usageSnapshot.label(for: .oneWeek),
-                        tone: usageSnapshot.tone(for: .oneWeek)
-                    )
+                        UsageBadge(
+                            title: "5h",
+                            value: usageSnapshot.label(for: .fiveHour),
+                            tone: usageSnapshot.tone(for: .fiveHour)
+                        )
+                        UsageBadge(
+                            title: "1w",
+                            value: usageSnapshot.label(for: .oneWeek),
+                            tone: usageSnapshot.tone(for: .oneWeek)
+                        )
+                    }
                 }
             }
 
             Spacer()
 
             VStack(alignment: .trailing, spacing: 8) {
-                Button {
-                    Task { await refreshUsage() }
-                } label: {
-                    if isRefreshingUsage {
-                        Label("Refreshing Usage", systemImage: "arrow.clockwise")
-                    } else {
-                        Label("Refresh Usage", systemImage: "arrow.clockwise")
+                if supportsUsageDisplay {
+                    Button {
+                        Task { await refreshUsage() }
+                    } label: {
+                        if isRefreshingUsage {
+                            Label("Refreshing Usage", systemImage: "arrow.clockwise")
+                        } else {
+                            Label("Refresh Usage", systemImage: "arrow.clockwise")
+                        }
                     }
-                }
-                .buttonStyle(.bordered)
-                .disabled(isRefreshingUsage || !hasConfiguredAuth)
+                    .buttonStyle(.bordered)
+                    .disabled(isRefreshingUsage || !hasConfiguredAuth)
 
-                Text(usageUpdatedText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    Text(usageUpdatedText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -319,6 +325,10 @@ struct AIProviderDetailView: View {
         config.isEnabled && hasStoredAuth
     }
 
+    private var supportsUsageDisplay: Bool {
+        hasConfiguredAuth && config.authMethod == .oauth
+    }
+
     private var hasStoredAuth: Bool {
         switch config.authMethod {
         case .apiKey:
@@ -472,6 +482,12 @@ struct AIProviderDetailView: View {
             if provider == .openAI {
                 config.oauthAccountID = BridgeAIProviderRegistry.openAIAccountID(fromJWT: credentials.access)
             }
+            if provider == .githubCopilot,
+               case let .string(endpoint) = credentials.extras["endpoint"] ?? .null,
+               !endpoint.isEmpty
+            {
+                config.baseURL = endpoint
+            }
 
             var settings = await BridgeAIProviderSecretStore.readSettings()
             settings[provider] = config
@@ -515,15 +531,23 @@ struct AIProviderDetailView: View {
         switch provider {
         case .openAI:
             try await OAuthLogin.loginOpenAICodex(callbacks: callbacks)
+        case .openAIChatCompletions:
+            throw OAuthError.unknownProvider(provider.rawValue)
         case .anthropic:
             try await OAuthLogin.loginAnthropic(callbacks: callbacks)
+        case .githubCopilot:
+            try await OAuthLogin.loginGitHubCopilot(callbacks: callbacks)
         case .googleGemini:
+            throw OAuthError.unknownProvider(provider.rawValue)
+        case .amazonBedrock, .azureOpenAIResponses, .cerebras, .cloudflareAIGateway, .cloudflareWorkersAI, .deepSeek,
+             .fireworks, .groq, .huggingFace, .kimiCoding, .minimax, .minimaxCN, .mistral, .moonshotAI, .moonshotAICN,
+             .opencode, .opencodeGo, .openRouter, .vercelAIGateway, .xAI, .xiaomi, .zAI, .openAICompatible:
             throw OAuthError.unknownProvider(provider.rawValue)
         }
     }
 
     private func refreshUsage() async {
-        guard hasConfiguredAuth else {
+        guard supportsUsageDisplay else {
             usageSnapshot = .unavailable
             return
         }

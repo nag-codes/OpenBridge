@@ -101,13 +101,16 @@ enum BridgeAIProviderUsageService {
             await refreshOpenAI()
         case .anthropic:
             await refreshAnthropic()
-        case .googleGemini:
+        case .openAIChatCompletions, .googleGemini, .amazonBedrock, .azureOpenAIResponses, .cerebras,
+             .cloudflareAIGateway, .cloudflareWorkersAI, .deepSeek, .fireworks, .githubCopilot, .groq, .huggingFace,
+             .kimiCoding, .minimax, .minimaxCN, .mistral, .moonshotAI, .moonshotAICN, .opencode, .opencodeGo,
+             .openRouter, .vercelAIGateway, .xAI, .xiaomi, .zAI, .openAICompatible:
             BridgeAIProviderUsageSnapshot(
                 fiveHour: nil,
                 oneWeek: nil,
                 updatedAt: nil,
                 source: .unavailable,
-                message: "Google Gemini does not expose ChatGPT-style 5-hour or weekly subscription limits."
+                message: "\(provider.displayName) does not expose ChatGPT-style 5-hour or weekly subscription limits."
             )
         }
     }
@@ -121,6 +124,7 @@ enum BridgeAIProviderUsageService {
             for provider in BridgeAIProvider.allCases {
                 let config = settings[provider]
                 guard config.isEnabled, configuredSecrets[provider] == true else { continue }
+                guard config.authMethod == .oauth else { continue }
                 group.addTask {
                     await (provider, refresh(provider: provider))
                 }

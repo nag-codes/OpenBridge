@@ -143,6 +143,7 @@ final class ChatEditorViewModel {
         let hasContent = hasText || attachmentManager.hasUploadedAttachments
         let noPendingUploads = !attachmentManager.hasPendingOrUploadingAttachments
 
+        guard hasAvailableModelSelection else { return false }
         guard !voiceInputState.blocksManualSend else { return false }
 
         // Allow sending to agent task even when streaming
@@ -340,6 +341,7 @@ final class ChatEditorViewModel {
     }
 
     func sendRetryMessage() {
+        guard hasAvailableModelSelection else { return }
         withLoadingTask {
             await self.sendRetryMessageTask()
         }
@@ -350,6 +352,7 @@ final class ChatEditorViewModel {
         let hasPendingUploads = submission.attachments.contains { $0.uploadState == .pending || $0.isUploading }
         let hasContent = submission.text != nil || hasUploadedAttachments || selectedSkill != nil || skillOverride != nil
         guard hasContent else { return false }
+        guard hasAvailableModelSelection else { return false }
         guard !hasPendingUploads else { return false }
         guard !voiceInputState.blocksManualSend else { return false }
         guard !isLoading else { return false }

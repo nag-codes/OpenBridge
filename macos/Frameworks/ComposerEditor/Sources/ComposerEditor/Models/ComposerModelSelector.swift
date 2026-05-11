@@ -101,11 +101,13 @@ public struct ComposerModelSelectorConfig {
     public var selectedModelId: Binding<String>
     public var selectedModelTitle: String
     public var selectedModelSubtitle: String?
+    public var emptyActionSystemImage: String?
     public var topMenuSections: [ComposerModelMenuSection]
     public var accessibilityIdentifier: String
     public var accessibilityLabel: String
     public var onOpen: () -> Void
     public var onSelect: (String) -> Void
+    public var onEmptyAction: (() -> Void)?
 
     public init(
         groups: [ComposerModelGroup],
@@ -113,22 +115,26 @@ public struct ComposerModelSelectorConfig {
         selectedModelId: Binding<String>,
         selectedModelTitle: String,
         selectedModelSubtitle: String? = nil,
+        emptyActionSystemImage: String? = nil,
         topMenuSections: [ComposerModelMenuSection] = [],
         accessibilityIdentifier: String = "chat.composer.modelSelector",
         accessibilityLabel: String = "Select model",
         onOpen: @escaping () -> Void,
-        onSelect: @escaping (String) -> Void
+        onSelect: @escaping (String) -> Void,
+        onEmptyAction: (() -> Void)? = nil
     ) {
         self.groups = groups
         self.isLoading = isLoading
         self.selectedModelId = selectedModelId
         self.selectedModelTitle = selectedModelTitle
         self.selectedModelSubtitle = selectedModelSubtitle
+        self.emptyActionSystemImage = emptyActionSystemImage
         self.topMenuSections = topMenuSections
         self.accessibilityIdentifier = accessibilityIdentifier
         self.accessibilityLabel = accessibilityLabel
         self.onOpen = onOpen
         self.onSelect = onSelect
+        self.onEmptyAction = onEmptyAction
     }
 }
 
@@ -141,75 +147,113 @@ struct ComposerModelSelectorView: View {
     @State private var isHovered = false
 
     var body: some View {
-        Menu {
-            if !config.topMenuSections.isEmpty {
-                ForEach(Array(config.topMenuSections.enumerated()), id: \.offset) { _, section in
-                    Section {
-                        ForEach(Array(section.items.enumerated()), id: \.offset) { _, item in
-                            modelMenuItem(item)
+        if shouldShowEmptyActionButton, let onEmptyAction = config.onEmptyAction {
+            Button(action: onEmptyAction) {
+                selectorLabel(
+                    systemImage: config.emptyActionSystemImage,
+                    title: config.selectedModelTitle,
+                    subtitle: nil,
+                    showsChevron: false
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled)
+            .accessibilityIdentifier(config.accessibilityIdentifier)
+            .accessibilityLabel(config.accessibilityLabel)
+            .onHover { hovering in
+                isHovered = hovering
+            }
+        } else {
+            Menu {
+                if !config.topMenuSections.isEmpty {
+                    ForEach(Array(config.topMenuSections.enumerated()), id: \.offset) { _, section in
+                        Section {
+                            ForEach(Array(section.items.enumerated()), id: \.offset) { _, item in
+                                modelMenuItem(item)
+                            }
+                        } header: {
+                            Text(section.title)
                         }
-                    } header: {
-                        Text(section.title)
+                    }
+                    Divider()
+                }
+
+                if config.groups.isEmpty, config.isLoading {
+                    Text("Loading models...")
+                        .foregroundColor(.secondary)
+                } else if config.groups.isEmpty {
+                    Text("No models available")
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(config.groups, id: \.provider) { group in
+                        groupSection(group)
                     }
                 }
-                Divider()
+            } label: {
+                selectorLabel(
+                    systemImage: selectedModelOption?.systemImage,
+                    title: config.selectedModelTitle,
+                    subtitle: config.selectedModelSubtitle,
+                    showsChevron: true
+                )
             }
+            .menuStyle(.button)
+            .buttonStyle(OnPressButtonStyle {
+                config.onOpen()
+            })
+            .menuIndicator(.hidden)
+            .disabled(disabled)
+            .accessibilityIdentifier(config.accessibilityIdentifier)
+            .accessibilityLabel(config.accessibilityLabel)
+            .onHover { hovering in
+                isHovered = hovering
+            }
+        }
+    }
 
-            if config.groups.isEmpty, config.isLoading {
-                Text("Loading models...")
-                    .foregroundColor(.secondary)
-            } else if config.groups.isEmpty {
-                Text("No models available")
-                    .foregroundColor(.secondary)
-            } else {
-                ForEach(config.groups, id: \.provider) { group in
-                    groupSection(group)
-                }
+    private var shouldShowEmptyActionButton: Bool {
+        config.groups.isEmpty && !config.isLoading && config.onEmptyAction != nil
+    }
+
+    private func selectorLabel(
+        systemImage: String?,
+        title: String,
+        subtitle: String?,
+        showsChevron: Bool
+    ) -> some View {
+        HStack(spacing: 4) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: 12, weight: .semibold))
             }
-        } label: {
-            HStack(spacing: 4) {
-                if let systemImage = selectedModelOption?.systemImage {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                Text(config.selectedModelTitle)
-                    .font(.system(size: 13, weight: .medium))
+            Text(title)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(minWidth: 0, alignment: .leading)
+            if let subtitle {
+                Text("(\(subtitle))")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(minWidth: 0, alignment: .leading)
-                if let subtitle = config.selectedModelSubtitle {
-                    Text("(\(subtitle))")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(minWidth: 0, alignment: .leading)
-                }
+            }
+            if showsChevron {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
                     .opacity(0.7)
             }
-            .frame(minWidth: 0)
-            .foregroundStyle(selectedModelForegroundColor)
-            .opacity(disabled ? ComposerControlStyle.disabledForegroundOpacity : 1.0)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(buttonBackgroundColor)
-            .clipShape(Capsule())
-            .contentShape(Capsule())
-            .animation(.easeInOut(duration: 0.15), value: isHovered)
         }
-        .menuStyle(.button)
-        .buttonStyle(OnPressButtonStyle {
-            config.onOpen()
-        })
-        .menuIndicator(.hidden)
-        .disabled(disabled)
-        .accessibilityIdentifier(config.accessibilityIdentifier)
-        .accessibilityLabel(config.accessibilityLabel)
-        .onHover { hovering in
-            isHovered = hovering
-        }
+        .frame(minWidth: 0)
+        .foregroundStyle(selectedModelForegroundColor)
+        .opacity(disabled ? ComposerControlStyle.disabledForegroundOpacity : 1.0)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(buttonBackgroundColor)
+        .clipShape(Capsule())
+        .contentShape(Capsule())
+        .animation(.easeInOut(duration: 0.15), value: isHovered)
     }
 
     private var buttonBackgroundColor: Color {

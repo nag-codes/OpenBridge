@@ -39,6 +39,7 @@ extension ChatEditorViewModel {
             )
         }
         let selectedModel = selectedModel
+        let hasModels = hasAvailableModelSelection
 
         return ComposerModelSelectorConfig(
             groups: groups,
@@ -49,15 +50,19 @@ extension ChatEditorViewModel {
                     self.updateSelectedModel(selectionID)
                 }
             ),
-            selectedModelTitle: selectedModel?.name ?? selectedModelID,
-            selectedModelSubtitle: selectedModelProvider,
+            selectedModelTitle: hasModels ? (selectedModel?.name ?? selectedModelID) : String(localized: "Set up AI provider"),
+            selectedModelSubtitle: hasModels ? selectedModelProvider : nil,
+            emptyActionSystemImage: "key.fill",
             accessibilityIdentifier: AccessibilityID.Chat.composerModelSelector,
-            accessibilityLabel: String(localized: "Select model"),
+            accessibilityLabel: hasModels ? String(localized: "Select model") : String(localized: "Set up AI provider"),
             onOpen: {
                 Task { await self.loadSelectedModel() }
             },
             onSelect: { selectionID in
                 self.updateSelectedModel(selectionID)
+            },
+            onEmptyAction: {
+                self.openAIProviderSettings()
             }
         )
     }
@@ -141,6 +146,10 @@ extension ChatEditorViewModel {
         BridgeAIProviderRegistry.displayModel(provider: selectedModelProvider, id: selectedModelID)
     }
 
+    var hasAvailableModelSelection: Bool {
+        availableModelGroups.contains { !$0.models.isEmpty }
+    }
+
     func loadSelectedModel() async {
         var settings = await BridgeAIProviderSecretStore.readSettings()
         availableModelGroups = BridgeAIProviderRegistry.availableModelsByProvider(settings: settings)
@@ -152,6 +161,11 @@ extension ChatEditorViewModel {
             try? await BridgeAIProviderSecretStore.saveSettings(settings)
         }
         availableModelGroups = BridgeAIProviderRegistry.availableModelsByProvider(settings: settings)
+        guard hasAvailableModelSelection else {
+            selectedModelProvider = settings.selectedModelProvider
+            selectedModelID = settings.selectedModelID
+            return
+        }
         let selected = BridgeAIProviderRegistry.displayModel(
             provider: settings.selectedModelProvider,
             id: settings.selectedModelID
@@ -191,6 +205,11 @@ extension ChatEditorViewModel {
               SettingsManager.shared.localEnvironmentPermissionMode != mode
         else { return }
         SettingsManager.shared.localEnvironmentPermissionMode = mode
+    }
+
+    private func openAIProviderSettings() {
+        SettingsNavigation.shared.navigate(to: .aiProviders)
+        Windows.shared.open(.settings)
     }
 
     private static func modelSelectionID(for model: Model) -> String {

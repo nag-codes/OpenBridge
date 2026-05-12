@@ -8,6 +8,7 @@
 // Platform configuration
 MACOSX_DEPLOYMENT_TARGET = 14.0
 SWIFT_VERSION = 6.0
+ARCHS = arm64
 
 // Signing base
 CODE_SIGNING_ALLOWED = YES

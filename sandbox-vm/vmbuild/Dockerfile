@@ -18,7 +18,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     socat \
     iproute2 \
     udhcpc \
-    git \
     ripgrep \
     fd-find \
     tree \

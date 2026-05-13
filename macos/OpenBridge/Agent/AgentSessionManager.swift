@@ -7,6 +7,15 @@ private func elapsedMilliseconds(since start: Date) -> Int {
     max(0, Int((Date().timeIntervalSince(start) * 1000).rounded()))
 }
 
+private func xmlEscaped(_ value: String) -> String {
+    value
+        .replacingOccurrences(of: "&", with: "&amp;")
+        .replacingOccurrences(of: "<", with: "&lt;")
+        .replacingOccurrences(of: ">", with: "&gt;")
+        .replacingOccurrences(of: "\"", with: "&quot;")
+        .replacingOccurrences(of: "'", with: "&apos;")
+}
+
 // MARK: - Agent Session Manager
 
 /// Central manager for local agent chat sessions.
@@ -199,6 +208,35 @@ final class AgentSessionManager {
         }
 
         throw AgentConfigError.featureUnavailable("Environment \(rawEnvironment ?? "")")
+    }
+
+    func localEnvironmentSystemPromptSection() async throws -> String {
+        _ = try await ensureRuntimeReady()
+
+        let environments = [vmConnector, connector].compactMap(\.self)
+        guard !environments.isEmpty else { return "" }
+
+        let entries = environments
+            .map { connector in
+                """
+                <environment>
+                  <name>\(connector.environmentKind.connectName)</name>
+                  <alias>\(connector.environmentKind.connectAlias)</alias>
+                  <description>\(xmlEscaped(connector.localDescription()))</description>
+                </environment>
+                """
+            }
+            .joined(separator: "\n")
+
+        return """
+        ## Available Environments
+
+        This is the current environment inventory at agent startup. It mirrors ListEnvironments and includes mounted sandbox folders when available.
+
+        <environments>
+        \(entries)
+        </environments>
+        """
     }
 
     var initialSystemReminder: String? {

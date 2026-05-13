@@ -2,9 +2,16 @@ import Foundation
 
 @MainActor
 enum OpenBridgeSystemPromptBuilder {
-    static func build(cwd: String, skills: [Skill], memory: String, computerUsePrompt: String? = nil) -> String {
+    static func build(
+        cwd: String,
+        skills: [Skill],
+        memory: String,
+        computerUsePrompt: String? = nil,
+        environmentInventory: String? = nil
+    ) -> String {
         let sections = [
             basePrompt(cwd: cwd),
+            environmentInventory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
             computerUsePrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
             skillSection(skills: skills),
             memory.trimmingCharacters(in: .whitespacesAndNewlines),

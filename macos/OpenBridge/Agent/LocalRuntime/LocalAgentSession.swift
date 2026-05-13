@@ -331,11 +331,13 @@ final class LocalAgentSession: Identifiable {
         let skillManager = SkillManager.shared
         let cwd = skillManager.skillDirs.workspace.path
         let memoryPrompt = await MemoryRepository.shared.systemPromptSection()
+        let environmentInventory = try? await AgentSessionManager.shared.localEnvironmentSystemPromptSection()
         let systemPrompt = OpenBridgeSystemPromptBuilder.build(
             cwd: cwd,
             skills: skillManager.skills,
             memory: memoryPrompt,
-            computerUsePrompt: OpenBridgeComputerUseAgent.systemPromptWithStartupInventory(clientStore: computerUseClientStore)
+            computerUsePrompt: OpenBridgeComputerUseAgent.systemPromptWithStartupInventory(clientStore: computerUseClientStore),
+            environmentInventory: environmentInventory
         )
         localBackgroundManager = backgroundManager
 

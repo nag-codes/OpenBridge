@@ -1,16 +1,4 @@
 import Foundation
-import OSLog
-
-private let logger = Logger(subsystem: Logger.loggingSubsystem, category: "LocalRuntimeConnector")
-
-private nonisolated func makeConnectorWebSocketSession() -> URLSession {
-    let configuration = URLSessionConfiguration.default
-    configuration.waitsForConnectivity = false
-    configuration.timeoutIntervalForRequest = 30
-    configuration.timeoutIntervalForResource = 604_800
-    configuration.httpMaximumConnectionsPerHost = 1
-    return URLSession(configuration: configuration)
-}
 
 private enum PermissionKind: String, Hashable {
     case hostAccess = "host_access"
@@ -57,11 +45,11 @@ private enum PermissionReplyReason {
     static let expired = "expired"
 }
 
-/// Persistent connector that exposes local execution environments to the agent runtime.
+/// In-process facade that routes local agent tools to macOS or the embedded VM.
 @MainActor @Observable
 final class LocalRuntimeConnector {
     enum State: String {
-        case disconnected, connecting, connected, reconnecting
+        case disconnected, connected
     }
 
     enum EnvironmentKind {
@@ -122,31 +110,9 @@ final class LocalRuntimeConnector {
         case embeddedVM(EmbeddedVMRuntimeBridge)
     }
 
-    private struct ConnectAck: Decodable {
-        let type: String
-        let envId: String?
-
-        private enum CodingKeys: String, CodingKey {
-            case type
-            case envId = "env_id"
-        }
-    }
-
-    private struct ResponseRoute {
-        let connectionID: UUID
-        let task: URLSessionWebSocketTask
-    }
-
-    private struct RequestTaskRecord {
-        let connectionID: UUID
-        let requestID: String
-        let task: Task<Void, Never>
-    }
-
     // MARK: - Public State
 
     private(set) var state: State = .disconnected
-    private(set) var envID: String?
 
     // MARK: - Configuration
 
@@ -158,26 +124,10 @@ final class LocalRuntimeConnector {
 
     // MARK: - Private
 
-    private var webSocketTask: URLSessionWebSocketTask?
-    private var activeConnectionID: UUID?
-    private var prevEnvID: String?
-    private var connectionTask: Task<Void, Never>?
-    private var pingTask: Task<Void, Never>?
-    private var requestTasks: [UUID: RequestTaskRecord] = [:]
-    private var responseRoutes: [String: ResponseRoute] = [:]
-    private var routedRequestIDs: Set<String> = []
-    private var shouldResetBackoffAfterDisconnect = false
-    private let writeSerializer = WriteSerializer()
     private var runningProcesses: [String: Process] = [:]
     private var processLock = NSLock()
     private var grantedPermissionKeys: Set<PermissionGrantKey> = []
     private var pendingPermissionConfirmationIDsByGrantKey: [PermissionGrantKey: String] = [:]
-    /// Routes incoming write_stream data chunks to the handler goroutine.
-    private var streamChannels: [String: AsyncStream<ConnectorStreamData>.Continuation] = [:]
-    private var streamChannelLock = NSLock()
-    @ObservationIgnored
-    private var skillInventoryObserver: NSObjectProtocol?
-    private let webSocketSession: URLSession
 
     // MARK: - Init
 
@@ -185,292 +135,18 @@ final class LocalRuntimeConnector {
         self.agentGroupId = agentGroupId
         self.environmentKind = environmentKind
         self.target = target
-        webSocketSession = makeConnectorWebSocketSession()
-        skillInventoryObserver = NotificationCenter.default.addObserver(
-            forName: .skillInventoryDidChange,
-            object: SkillManager.shared,
-            queue: nil
-        ) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.sendSkillMetadataSnapshotIfConnected()
-            }
-        }
-    }
-
-    deinit {
-        MainActor.assumeIsolated {
-            if let skillInventoryObserver {
-                NotificationCenter.default.removeObserver(skillInventoryObserver)
-            }
-        }
-        webSocketSession.invalidateAndCancel()
     }
 
     // MARK: - Lifecycle
 
     func connect() {
-        guard connectionTask == nil else { return }
-        connectionTask = Task { [weak self] in
-            guard let self else { return }
-            await runWithReconnect()
-        }
+        state = .connected
     }
 
     func disconnect() {
-        connectionTask?.cancel()
-        connectionTask = nil
-        pingTask?.cancel()
-        pingTask = nil
-        cancelAllRequestTasks()
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
-        webSocketTask = nil
-        activeConnectionID = nil
-        shouldResetBackoffAfterDisconnect = false
         state = .disconnected
         clearAllGrantedPermissions()
         killAllProcesses()
-        finishAllStreamChannels()
-    }
-
-    // MARK: - Connection Loop
-
-    private func runWithReconnect() async {
-        var backoff: UInt64 = 1
-        shouldResetBackoffAfterDisconnect = false
-        while !Task.isCancelled {
-            state = backoff == 1 ? .connecting : .reconnecting
-
-            do {
-                try await connectAndServe()
-            } catch {
-                if Task.isCancelled { break }
-                if shouldResetBackoffAfterDisconnect {
-                    backoff = 1
-                    shouldResetBackoffAfterDisconnect = false
-                }
-                logger.warning("Disconnected: \(error.localizedDescription)")
-            }
-
-            state = .disconnected
-            if Task.isCancelled { break }
-
-            logger.info("Reconnecting in \(backoff)s")
-            do {
-                try await Task.sleep(for: .seconds(backoff))
-            } catch {
-                break
-            }
-            backoff = min(backoff * 2, 5)
-        }
-        state = .disconnected
-    }
-
-    private func connectAndServe() async throws {
-        let connectionID = UUID()
-        let task = webSocketSession.webSocketTask(with: buildConnectRequest())
-        activeConnectionID = connectionID
-        webSocketTask = task
-        task.resume()
-        defer {
-            pingTask?.cancel()
-            pingTask = nil
-            cancelRequestTasks(for: connectionID)
-            if webSocketTask === task {
-                webSocketTask = nil
-            }
-            if activeConnectionID == connectionID {
-                activeConnectionID = nil
-            }
-            finishAllStreamChannels()
-            killAllProcesses()
-        }
-
-        try await sendInitialSkillMetadata(on: task)
-        let envId = try await receiveConnectedEnvID(from: task)
-        prevEnvID = envId
-        envID = envId
-        state = .connected
-        shouldResetBackoffAfterDisconnect = true
-        logger.info("Connected, env_id=\(envId)")
-
-        startPingLoop(for: task)
-        try await serveRequests(on: task, connectionID: connectionID)
-    }
-
-    private func buildConnectRequest() -> URLRequest {
-        var request = URLRequest(url: buildConnectURL())
-        request.timeoutInterval = 30
-        return request
-    }
-
-    private func receiveConnectedEnvID(from task: URLSessionWebSocketTask) async throws -> String {
-        let ackMessage = try await withTimeout(.seconds(30)) {
-            try await task.receive()
-        }
-        let ackData = try data(from: ackMessage)
-        let ack = try JSONDecoder().decode(ConnectAck.self, from: ackData)
-        guard ack.type == "connected", let envId = ack.envId else {
-            throw ConnectorError.notConnected
-        }
-        return envId
-    }
-
-    private func serveRequests(on task: URLSessionWebSocketTask, connectionID: UUID) async throws {
-        while !Task.isCancelled {
-            let message = try await task.receive()
-            await handleSocketMessage(message, on: task, connectionID: connectionID)
-        }
-    }
-
-    private func handleSocketMessage(
-        _ message: URLSessionWebSocketTask.Message,
-        on task: URLSessionWebSocketTask,
-        connectionID: UUID
-    ) async {
-        guard let data = try? data(from: message),
-              let msg = try? JSONDecoder().decode(ConnectorMessage.self, from: data)
-        else {
-            return
-        }
-
-        if msg.type == "stream", let streamData = msg.stream {
-            routeStreamChunk(id: msg.id, data: streamData)
-            return
-        }
-
-        guard msg.type == "request" else { return }
-
-        responseRoutes[msg.id] = ResponseRoute(connectionID: connectionID, task: task)
-        routedRequestIDs.insert(msg.id)
-        let requestTaskID = UUID()
-        let requestTask = Task { [weak self] in
-            guard let self else { return }
-            defer { unregisterRequestTask(requestTaskID) }
-            await handleRequest(msg)
-        }
-        requestTasks[requestTaskID] = RequestTaskRecord(connectionID: connectionID, requestID: msg.id, task: requestTask)
-    }
-
-    private func data(from message: URLSessionWebSocketTask.Message) throws -> Data {
-        switch message {
-        case let .string(text): return Data(text.utf8)
-        case let .data(data): return data
-        @unknown default: throw ConnectorError.notConnected
-        }
-    }
-
-    private func startPingLoop(for task: URLSessionWebSocketTask) {
-        pingTask?.cancel()
-        pingTask = Task { [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(15))
-                } catch {
-                    return
-                }
-
-                do {
-                    try await waitForPong(on: task, timeout: .seconds(10))
-                } catch {
-                    logger.warning("WebSocket ping failed: \(error.localizedDescription)")
-                    task.cancel(with: .goingAway, reason: nil)
-                    return
-                }
-            }
-        }
-    }
-
-    private func waitForPong(on task: URLSessionWebSocketTask, timeout: Duration) async throws {
-        try await withCheckedThrowingContinuation { continuation in
-            let pingState = PingContinuationState(continuation: continuation)
-            let timeoutTask = Task {
-                try? await Task.sleep(for: timeout)
-                pingState.resume(.failure(PingError.timeout))
-            }
-            pingState.setTimeoutTask(timeoutTask)
-
-            task.sendPing { error in
-                pingState.cancelTimeout()
-                if let error {
-                    pingState.resume(.failure(error))
-                } else {
-                    pingState.resume(.success(()))
-                }
-            }
-        }
-    }
-
-    private nonisolated func withTimeout<T: Sendable>(
-        _ timeout: Duration,
-        operation: @escaping @Sendable () async throws -> T
-    ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await operation()
-            }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-                throw TimeoutError.timeout
-            }
-
-            guard let result = try await group.next() else {
-                throw TimeoutError.timeout
-            }
-            group.cancelAll()
-            return result
-        }
-    }
-
-    private func unregisterRequestTask(_ id: UUID) {
-        guard let entry = requestTasks.removeValue(forKey: id) else { return }
-        if responseRoutes[entry.requestID]?.connectionID == entry.connectionID {
-            responseRoutes.removeValue(forKey: entry.requestID)
-            routedRequestIDs.remove(entry.requestID)
-        } else if responseRoutes[entry.requestID] == nil {
-            routedRequestIDs.remove(entry.requestID)
-        }
-    }
-
-    private func cancelRequestTasks(for connectionID: UUID) {
-        for entry in requestTasks.values where entry.connectionID == connectionID {
-            entry.task.cancel()
-        }
-    }
-
-    private func cancelAllRequestTasks() {
-        for entry in requestTasks.values {
-            entry.task.cancel()
-        }
-    }
-
-    // MARK: - URL Construction
-
-    private func buildConnectURL() -> URL {
-        guard var components = URLComponents(string: "ws://127.0.0.1") else {
-            fatalError("Invalid API base URL")
-        }
-        components.path = "/v1/user/agent/connect"
-        components.scheme = "ws"
-
-        var queryItems: [URLQueryItem] = [
-            URLQueryItem(name: "name", value: environmentKind.connectName),
-            URLQueryItem(name: "alias", value: environmentKind.connectAlias),
-            URLQueryItem(name: "group_id", value: agentGroupId),
-            URLQueryItem(name: "initial_metadata", value: "1"),
-            URLQueryItem(name: "os", value: "darwin"),
-            URLQueryItem(name: "arch", value: currentArch()),
-        ]
-        if let prevEnvID {
-            queryItems.append(URLQueryItem(name: "env_id", value: prevEnvID))
-        }
-        components.queryItems = queryItems
-
-        let descEncoded = localDescription().addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? ""
-        let separator = components.percentEncodedQuery == nil ? "?" : "&"
-        components.percentEncodedQuery = (components.percentEncodedQuery ?? "") + "\(separator)description=\(descEncoded)"
-        return components.url!
     }
 
     private func currentArch() -> String {
@@ -567,21 +243,6 @@ final class LocalRuntimeConnector {
         return result
     }
 
-    static func localSkillMetadata(skills: [Skill]) -> [EnvironmentSkillMetadata] {
-        activeSkills(skills).map { skill in
-            EnvironmentSkillMetadata(
-                name: skill.name,
-                description: normalizedDescription(skill.description),
-                location: skill.fileURL.path,
-                source: skillCategoryLabel(skill.category)
-            )
-        }
-    }
-
-    private static func localCapabilities(for _: EnvironmentKind) -> EnvironmentCapabilities {
-        EnvironmentCapabilities()
-    }
-
     private static func activeSkills(_ skills: [Skill]) -> [Skill] {
         skills
             .filter { !$0.disabled && $0.visibility != .hidden }
@@ -594,21 +255,6 @@ final class LocalRuntimeConnector {
         URL(fileURLWithPath: homeDirectory, isDirectory: true)
             .appendingPathComponent(".openbridge/skills", isDirectory: true)
             .path
-    }
-
-    private func sendSkillMetadataSnapshotIfConnected() async {
-        guard state == .connected, webSocketTask != nil else { return }
-        await sendResponse(.metadata(
-            skills: Self.localSkillMetadata(skills: SkillManager.shared.skills),
-            capabilities: Self.localCapabilities(for: environmentKind)
-        ))
-    }
-
-    private func sendInitialSkillMetadata(on task: URLSessionWebSocketTask) async throws {
-        try await sendMessage(.metadata(
-            skills: Self.localSkillMetadata(skills: SkillManager.shared.skills),
-            capabilities: Self.localCapabilities(for: environmentKind)
-        ), on: task)
     }
 
     private static func skillCategoryLabel(_ category: Skill.Category) -> String {
@@ -642,281 +288,7 @@ final class LocalRuntimeConnector {
         return String(trimmed[..<endIndex]) + "..."
     }
 
-    // MARK: - Request Dispatch
-
-    private func handleRequest(_ msg: ConnectorMessage) async {
-        guard let method = msg.method else {
-            await sendResponse(.error(id: msg.id, message: "missing method"))
-            return
-        }
-
-        if await handleReadRequest(method, msg: msg) {
-            return
-        }
-        if await handleWriteRequest(method, msg: msg) {
-            return
-        }
-
-        switch method {
-        case ConnectorMethod.readStream:
-            await dispatchReadStream(msg)
-        case ConnectorMethod.writeStream:
-            await dispatchWriteStream(msg)
-        case ConnectorMethod.exec:
-            await handleExecRequest(msg)
-        case ConnectorMethod.requestPermission:
-            await handleRequestPermission(msg)
-        default:
-            await sendResponse(.error(id: msg.id, message: "unknown method: \(method)"))
-        }
-    }
-
-    private func handleReadRequest(_ method: String, msg: ConnectorMessage) async -> Bool {
-        switch method {
-        case ConnectorMethod.read:
-            await dispatchWithReadCheck(msg, pathKey: \.path) { try await self.handleRead(params: $0, sessionID: msg.sessionId) }
-        case ConnectorMethod.stat:
-            await dispatchWithReadCheck(msg, pathKey: \.path) { try await self.handleStat(params: $0, sessionID: msg.sessionId) }
-        case ConnectorMethod.list:
-            await dispatchWithReadCheck(msg, pathKey: \.path) { try await self.handleList(params: $0, sessionID: msg.sessionId) }
-        case ConnectorMethod.glob:
-            await dispatchWithReadCheck(msg, pathKey: \.optionalPath) { try await self.handleGlob(params: $0, sessionID: msg.sessionId) }
-        case ConnectorMethod.grep:
-            await dispatchWithReadCheck(msg, pathKey: \.optionalPath) { try await self.handleGrep(params: $0, sessionID: msg.sessionId) }
-        default:
-            return false
-        }
-        return true
-    }
-
-    private func handleWriteRequest(_ method: String, msg: ConnectorMessage) async -> Bool {
-        switch method {
-        case ConnectorMethod.write:
-            await dispatchWithWriteCheck(msg, description: describeWrite(msg.params)) {
-                try await self.handleWrite(params: $0, sessionID: msg.sessionId)
-            }
-        case ConnectorMethod.delete:
-            await dispatchWithWriteCheck(msg, description: describeDelete(msg.params)) {
-                try await self.handleDelete(params: $0, sessionID: msg.sessionId)
-            }
-        default:
-            return false
-        }
-        return true
-    }
-
-    private func handleExecRequest(_ msg: ConnectorMessage) async {
-        switch environmentKind {
-        case .localMacOS:
-            await handleLocalMacExecRequest(msg)
-        case .localVM:
-            await handleExec(msg, commandOverride: nil)
-        }
-    }
-
-    private func handleLocalMacExecRequest(_ msg: ConnectorMessage) async {
-        if requiresExecPermission(sessionId: msg.sessionId) {
-            await sendResponse(.error(id: msg.id, message: protectedEnvironmentError(action: "execute command")))
-            return
-        }
-        await handleExec(msg, commandOverride: nil)
-    }
-
-    private func dispatchWithReadCheck(
-        _ msg: ConnectorMessage,
-        pathKey: KeyPath<PathExtractor, String?>,
-        handler: @Sendable (JSONValue) async throws -> JSONValue
-    ) async {
-        guard let params = msg.params else {
-            await sendResponse(.error(id: msg.id, message: "missing params"))
-            return
-        }
-        if hasGrantedPermission(sessionId: msg.sessionId, kind: .hostAccess) {
-            do {
-                let result = try await handler(params)
-                await sendResponse(.response(id: msg.id, result: result))
-            } catch {
-                await sendResponse(.error(id: msg.id, message: error.localizedDescription))
-            }
-            return
-        }
-        let extractor = PathExtractor(params: params)
-        if let raw = extractor[keyPath: pathKey] {
-            let (_, elevated) = checkReadPath(raw)
-            if requiresPathPermission(elevated: elevated) {
-                await sendResponse(.error(id: msg.id, message: protectedEnvironmentError(action: "read \(raw)")))
-                return
-            }
-        }
-        do {
-            let result = try await handler(params)
-            await sendResponse(.response(id: msg.id, result: result))
-        } catch {
-            await sendResponse(.error(id: msg.id, message: error.localizedDescription))
-        }
-    }
-
-    private func dispatchWithWriteCheck(
-        _ msg: ConnectorMessage,
-        description: String,
-        handler: @Sendable (JSONValue) async throws -> JSONValue
-    ) async {
-        guard let params = msg.params else {
-            await sendResponse(.error(id: msg.id, message: "missing params"))
-            return
-        }
-        if hasGrantedPermission(sessionId: msg.sessionId, kind: .hostAccess) {
-            do {
-                let result = try await handler(params)
-                await sendResponse(.response(id: msg.id, result: result))
-            } catch {
-                await sendResponse(.error(id: msg.id, message: error.localizedDescription))
-            }
-            return
-        }
-        let extractor = PathExtractor(params: params)
-        if let raw = extractor.path {
-            _ = checkWritePath(raw)
-            if requiresMutationPermission() {
-                await sendResponse(.error(id: msg.id, message: protectedEnvironmentError(action: description)))
-                return
-            }
-        }
-        do {
-            let result = try await handler(params)
-            await sendResponse(.response(id: msg.id, result: result))
-        } catch {
-            await sendResponse(.error(id: msg.id, message: error.localizedDescription))
-        }
-    }
-
     private var pendingConfirmations: [String: PendingConfirmation] = [:]
-
-    private func describeWrite(_ params: JSONValue?) -> String {
-        guard let params, let p = try? params.decode(WriteParams.self) else {
-            return String(localized: "Write to a file")
-        }
-        let size = p.content.utf8.count
-        return String(localized: "Write \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)) to \(p.path)")
-    }
-
-    private func describeDelete(_ params: JSONValue?) -> String {
-        guard let params, let p = try? params.decode(DeleteParams.self) else {
-            return String(localized: "Delete a file")
-        }
-        let recursive = (p.recursive == true) ? " (recursive)" : ""
-        return String(localized: "Delete \(p.path)\(recursive)")
-    }
-
-    private func describeExec(_ command: String) -> String {
-        let truncated = command.count > 200 ? String(command.prefix(200)) + "..." : command
-        return String(localized: "Run command:\n\(truncated)")
-    }
-
-    private func describeExec(_ params: JSONValue?) -> String {
-        guard let params, let p = try? params.decode(ExecParams.self) else {
-            return String(localized: "Run a shell command")
-        }
-        if let description = p.description?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty {
-            return description
-        }
-        return describeExec(p.command)
-    }
-
-    // MARK: - Streaming Dispatch
-
-    private func dispatchReadStream(_ msg: ConnectorMessage) async {
-        guard let params = msg.params else {
-            await sendResponse(.error(id: msg.id, message: "missing params"))
-            return
-        }
-        if hasGrantedPermission(sessionId: msg.sessionId, kind: .hostAccess) {
-            await handleReadStream(msg)
-            return
-        }
-        let extractor = PathExtractor(params: params)
-        if let raw = extractor.path {
-            let (_, elevated) = checkReadPath(raw)
-            if requiresPathPermission(elevated: elevated) {
-                await sendResponse(.error(id: msg.id, message: protectedEnvironmentError(action: "stream read \(raw)")))
-                return
-            }
-        }
-        await handleReadStream(msg)
-    }
-
-    private func dispatchWriteStream(_ msg: ConnectorMessage) async {
-        guard let params = msg.params else {
-            await sendResponse(.error(id: msg.id, message: "missing params"))
-            return
-        }
-        if hasGrantedPermission(sessionId: msg.sessionId, kind: .hostAccess) {
-            await handleWriteStream(msg)
-            return
-        }
-        let extractor = PathExtractor(params: params)
-        if let raw = extractor.path {
-            _ = checkWritePath(raw)
-            if requiresMutationPermission() {
-                let description =
-                    if let p = try? params.decode(WriteStreamParams.self) {
-                        String(localized: "Stream write to \(p.path)")
-                    } else {
-                        String(localized: "Stream write to a file")
-                    }
-                await sendResponse(.error(id: msg.id, message: protectedEnvironmentError(action: description)))
-                return
-            }
-        }
-        await handleWriteStream(msg)
-    }
-
-    // MARK: - Stream Channel Management
-
-    func registerStreamChannel(for requestId: String) -> AsyncStream<ConnectorStreamData> {
-        let (stream, continuation) = AsyncStream<ConnectorStreamData>.makeStream()
-        streamChannelLock.lock()
-        streamChannels[requestId] = continuation
-        streamChannelLock.unlock()
-        return stream
-    }
-
-    func unregisterStreamChannel(for requestId: String) {
-        streamChannelLock.lock()
-        let continuation = streamChannels.removeValue(forKey: requestId)
-        streamChannelLock.unlock()
-        continuation?.finish()
-    }
-
-    private func routeStreamChunk(id: String, data: ConnectorStreamData) {
-        streamChannelLock.lock()
-        let continuation = streamChannels[id]
-        streamChannelLock.unlock()
-        continuation?.yield(data)
-    }
-
-    // MARK: - WebSocket Write
-
-    func sendResponse(_ msg: ConnectorMessage) async {
-        let route = responseRoutes[msg.id]
-        guard let task = route?.task ?? webSocketTask else { return }
-        if let route {
-            guard route.connectionID == activeConnectionID, webSocketTask === task else { return }
-        } else if routedRequestIDs.contains(msg.id) {
-            return
-        }
-        do {
-            try await sendMessage(msg, on: task)
-        } catch {
-            logger.error("WS write failed: \(error.localizedDescription)")
-        }
-    }
-
-    private func sendMessage(_ msg: ConnectorMessage, on task: URLSessionWebSocketTask) async throws {
-        let data = try JSONEncoder().encode(msg)
-        let text = String(data: data, encoding: .utf8) ?? ""
-        try await writeSerializer.send(text, on: task)
-    }
 
     // MARK: - Path Safety
 
@@ -1052,16 +424,6 @@ final class LocalRuntimeConnector {
         processLock.lock()
         runningProcesses.removeValue(forKey: id)
         processLock.unlock()
-    }
-
-    private func finishAllStreamChannels() {
-        streamChannelLock.lock()
-        let continuations = streamChannels.values
-        streamChannels.removeAll()
-        streamChannelLock.unlock()
-        for continuation in continuations {
-            continuation.finish()
-        }
     }
 
     private func killAllProcesses() {
@@ -1240,81 +602,6 @@ private extension LocalRuntimeConnector {
         }
     }
 
-    func handleRequestPermission(_ msg: ConnectorMessage) async {
-        guard let params = msg.params else {
-            await sendResponse(.error(id: msg.id, message: "missing params"))
-            return
-        }
-
-        let request: RequestPermissionParams
-        do {
-            request = try params.decode(RequestPermissionParams.self)
-        } catch {
-            await sendResponse(.error(id: msg.id, message: "invalid params: \(error.localizedDescription)"))
-            return
-        }
-
-        let trimmedDescription = request.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedDescription.isEmpty else {
-            await sendResponse(.error(id: msg.id, message: "description is required"))
-            return
-        }
-
-        let kind: PermissionKind
-        do {
-            kind = try .init(rawValueOrDefault: request.kind)
-        } catch {
-            await sendResponse(.error(id: msg.id, message: error.localizedDescription))
-            return
-        }
-
-        switch environmentKind {
-        case .localVM:
-            await sendResponse(.response(id: msg.id, result: .dict([
-                "approved": true,
-                "environment_id": environmentKind.connectAlias,
-                "environment_label": environmentKind.permissionEnvironmentLabel,
-                "message": "permission is not required for this environment",
-            ])))
-        case .localMacOS:
-            guard normalizedSessionKey(msg.sessionId) != nil else {
-                await sendResponse(.error(id: msg.id, message: "request_permission requires session context"))
-                return
-            }
-
-            if hasGrantedPermission(sessionId: msg.sessionId, kind: kind) {
-                await sendResponse(.response(id: msg.id, result: .dict([
-                    "approved": true,
-                    "environment_id": environmentKind.connectAlias,
-                    "environment_label": environmentKind.permissionEnvironmentLabel,
-                    "message": "\(kind.approvalLabel) is already granted for this session",
-                ])))
-                return
-            }
-
-            let requestEnvironment = request.environment.trimmingCharacters(in: .whitespacesAndNewlines)
-            let requestDescription = if requestEnvironment.isEmpty {
-                trimmedDescription
-            } else {
-                "\(trimmedDescription)\nRequested environment: \(EnvironmentKind.userVisibleName(forAlias: requestEnvironment))"
-            }
-            let approved = await requestPermission(
-                method: request.environment,
-                kind: kind,
-                description: requestDescription,
-                sessionId: msg.sessionId
-            )
-            await sendResponse(.response(id: msg.id, result: .dict([
-                "approved": approved,
-                "environment_id": environmentKind.connectAlias,
-                "environment_label": environmentKind.permissionEnvironmentLabel,
-                "message": approved
-                    ? "\(kind.approvalLabel) granted for this session"
-                    : "\(kind.approvalLabel) denied for this session",
-            ])))
-        }
-    }
-
     func canResolveConfirmation(id: String) -> Bool {
         pendingConfirmations[id] != nil
     }
@@ -1449,87 +736,4 @@ private extension LocalRuntimeConnector {
             continuation.resume(returning: reply)
         }
     }
-}
-
-private actor WriteSerializer {
-    func send(_ text: String, on task: URLSessionWebSocketTask) async throws {
-        try await task.send(.string(text))
-    }
-}
-
-private enum PingError: LocalizedError {
-    case timeout
-
-    var errorDescription: String? {
-        switch self {
-        case .timeout:
-            "websocket ping timed out"
-        }
-    }
-}
-
-private enum TimeoutError: LocalizedError {
-    case timeout
-
-    var errorDescription: String? {
-        switch self {
-        case .timeout:
-            "operation timed out"
-        }
-    }
-}
-
-private final class PingContinuationState: @unchecked Sendable {
-    // Safety: access to `continuation` and `timeoutTask` is serialized by `lock`,
-    // and `resume` clears them before resuming so callers can safely race success
-    // vs timeout callbacks without actor hops.
-    private let lock = NSLock()
-    private nonisolated(unsafe) var continuation: CheckedContinuation<Void, Error>?
-    private nonisolated(unsafe) var timeoutTask: Task<Void, Never>?
-
-    init(continuation: CheckedContinuation<Void, Error>) {
-        self.continuation = continuation
-    }
-
-    nonisolated func setTimeoutTask(_ timeoutTask: Task<Void, Never>) {
-        lock.lock()
-        self.timeoutTask = timeoutTask
-        lock.unlock()
-    }
-
-    nonisolated func cancelTimeout() {
-        lock.lock()
-        let timeoutTask = timeoutTask
-        self.timeoutTask = nil
-        lock.unlock()
-        timeoutTask?.cancel()
-    }
-
-    nonisolated func resume(_ result: Result<Void, Error>) {
-        lock.lock()
-        guard let continuation else {
-            lock.unlock()
-            return
-        }
-        self.continuation = nil
-        let timeoutTask = timeoutTask
-        self.timeoutTask = nil
-        lock.unlock()
-        timeoutTask?.cancel()
-
-        switch result {
-        case .success:
-            continuation.resume()
-        case let .failure(error):
-            continuation.resume(throwing: error)
-        }
-    }
-}
-
-extension CharacterSet {
-    static let urlQueryValueAllowed: CharacterSet = {
-        var cs = CharacterSet.urlQueryAllowed
-        cs.remove(charactersIn: ";=&+/")
-        return cs
-    }()
 }

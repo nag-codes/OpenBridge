@@ -1,118 +1,5 @@
 import Foundation
 
-// MARK: - Wire Protocol Types
-
-/// Mirrors the local connector EnvMessage wire format used for WebSocket
-/// communication with local macOS and VM workspaces.
-struct ConnectorMessage: Codable {
-    let id: String
-    var type: String
-    var method: String?
-    var params: JSONValue?
-    var result: JSONValue?
-    var error: String?
-    var stream: ConnectorStreamData?
-    var skills: [EnvironmentSkillMetadata]?
-    var capabilities: EnvironmentCapabilities?
-    var agentId: String?
-    var sessionId: String?
-    var operationId: String?
-    var async: Bool?
-
-    private enum CodingKeys: String, CodingKey {
-        case id, type, method, params, result, error, stream, skills, capabilities
-        case agentId = "agent_id"
-        case sessionId = "session_id"
-        case operationId = "operation_id"
-        case async
-    }
-
-    static func response(id: String, result: JSONValue) -> ConnectorMessage {
-        ConnectorMessage(id: id, type: "response", result: result)
-    }
-
-    static func error(id: String, message: String) -> ConnectorMessage {
-        ConnectorMessage(id: id, type: "error", error: message)
-    }
-
-    static func stream(id: String, channel: String, data: String, eof: Bool = false, seq: Int? = nil) -> ConnectorMessage {
-        ConnectorMessage(
-            id: id,
-            type: "stream",
-            stream: ConnectorStreamData(channel: channel, data: data, eof: eof, seq: seq)
-        )
-    }
-
-    static func metadata(skills: [EnvironmentSkillMetadata], capabilities: EnvironmentCapabilities) -> ConnectorMessage {
-        ConnectorMessage(
-            id: UUID().uuidString,
-            type: "metadata",
-            skills: skills,
-            capabilities: capabilities
-        )
-    }
-}
-
-struct EnvironmentSkillMetadata: Codable, Equatable {
-    let name: String
-    let description: String
-    let location: String
-    let source: String
-}
-
-struct EnvironmentCapabilities: Codable, Equatable {}
-
-/// Carries incremental output from exec and file streaming commands.
-struct ConnectorStreamData: Codable {
-    let channel: String
-    let data: String
-    let eof: Bool
-    let seq: Int?
-
-    init(channel: String, data: String, eof: Bool = false, seq: Int? = nil) {
-        self.channel = channel
-        self.data = data
-        self.eof = eof
-        self.seq = seq
-    }
-}
-
-// MARK: - RPC Method Constants
-
-enum ConnectorMethod {
-    static let read = "read"
-    static let write = "write"
-    static let delete = "delete"
-    static let stat = "stat"
-    static let list = "list"
-    static let glob = "glob"
-    static let grep = "grep"
-    static let exec = "exec"
-    static let requestPermission = "request_permission"
-    static let readStream = "read_stream"
-    static let writeStream = "write_stream"
-}
-
-// MARK: - Path Extraction
-
-/// Extracts the path field from RPC params for pre-dispatch sandbox checks.
-/// Works with both required-path params (read, write, stat, list, delete)
-/// and optional-path params (glob, grep).
-struct PathExtractor {
-    /// The required `path` field (nil if missing or decode fails).
-    let path: String?
-    /// The optional `path` field (nil if not present). For glob/grep where
-    /// path is optional, a nil value means "use default" and needs no check.
-    let optionalPath: String?
-
-    init(params: JSONValue) {
-        struct RequiredPath: Decodable { let path: String }
-        struct OptionalPath: Decodable { var path: String? }
-        path = try? params.decode(RequiredPath.self).path
-        optionalPath = (try? params.decode(OptionalPath.self))?.path
-    }
-}
-
 // MARK: - RPC Param Types
 
 struct ReadParams: Decodable, Sendable {
@@ -153,15 +40,6 @@ struct GrepParams: Decodable, Sendable {
     var context: Int?
 }
 
-struct ReadStreamParams: Decodable, Sendable {
-    let path: String
-}
-
-struct WriteStreamParams: Decodable, Sendable {
-    let path: String
-    var mode: Int?
-}
-
 struct ExecParams: Decodable, Sendable {
     let command: String
     var description: String?
@@ -176,12 +54,6 @@ struct ExecParams: Decodable, Sendable {
         case timeout
         case env
     }
-}
-
-struct RequestPermissionParams: Decodable, Sendable {
-    let environment: String
-    let description: String
-    var kind: String?
 }
 
 struct ComputerUseParams: Decodable, Sendable {

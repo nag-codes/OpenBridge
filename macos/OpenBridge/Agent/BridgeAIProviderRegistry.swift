@@ -112,6 +112,7 @@ enum BridgeAIProviderRegistry {
             "azure-openai-responses",
             "bedrock-converse-stream",
             "google-generative-ai",
+            "github-copilot-chat",
             "mistral-conversations",
             "openai-codex-responses",
             "openai-completions",
@@ -197,7 +198,26 @@ enum BridgeAIProviderRegistry {
         if provider == "mistral", catalogModel?.api == "mistral-conversations" {
             return mistralRuntimeModel(catalogModel)
         }
+        if provider == BridgeAIProvider.githubCopilot.rawValue, let catalogModel {
+            return githubCopilotRuntimeModel(catalogModel)
+        }
         return catalogModel
+    }
+
+    private static func githubCopilotRuntimeModel(_ catalog: Model) -> Model {
+        Model(
+            id: catalog.id,
+            name: catalog.name,
+            api: "github-copilot-chat",
+            provider: catalog.provider,
+            baseUrl: catalog.baseUrl,
+            reasoning: catalog.reasoning,
+            input: catalog.input,
+            cost: catalog.cost,
+            contextWindow: catalog.contextWindow,
+            maxTokens: catalog.maxTokens,
+            headers: catalog.headers
+        )
     }
 
     private static func openAIChatCompletionsModels(config: BridgeAIProviderConfig) -> [Model] {

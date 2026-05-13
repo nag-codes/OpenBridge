@@ -28,7 +28,7 @@ extension ChatEditorViewModel {
     var composerRealModelSelectorConfig: ComposerModelSelectorConfig? {
         let groups = availableModelGroups.map { group in
             ComposerModelGroup(
-                provider: group.provider,
+                provider: BridgeAIProviderRegistry.displayProviderName(group.provider),
                 models: group.models.map { model in
                     ComposerModelOption(
                         id: Self.modelSelectionID(for: model),
@@ -51,7 +51,7 @@ extension ChatEditorViewModel {
                 }
             ),
             selectedModelTitle: hasModels ? (selectedModel?.name ?? selectedModelID) : String(localized: "Set up AI provider"),
-            selectedModelSubtitle: hasModels ? selectedModelProvider : nil,
+            selectedModelSubtitle: hasModels ? BridgeAIProviderRegistry.displayProviderName(selectedModelProvider) : nil,
             emptyActionSystemImage: "key.fill",
             accessibilityIdentifier: AccessibilityID.Chat.composerModelSelector,
             accessibilityLabel: hasModels ? String(localized: "Select model") : String(localized: "Set up AI provider"),

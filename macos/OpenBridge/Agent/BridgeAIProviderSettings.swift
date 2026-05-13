@@ -64,7 +64,6 @@ nonisolated enum BridgeAIProvider: String, CaseIterable, Codable, Identifiable, 
             .xiaomi,
             .zAI,
             .openAIChatCompletions,
-            .openAICompatible,
         ]
     }
 
@@ -234,7 +233,7 @@ nonisolated enum BridgeAIProvider: String, CaseIterable, Codable, Identifiable, 
         case .openAI:
             ["chatgpt-codex", "openai", "openai-codex"]
         case .openAIChatCompletions:
-            ["openai"]
+            [rawValue]
         case .anthropic:
             ["anthropic"]
         case .googleGemini:
@@ -247,7 +246,9 @@ nonisolated enum BridgeAIProvider: String, CaseIterable, Codable, Identifiable, 
     }
 
     static func provider(for model: Model) -> BridgeAIProvider? {
-        if model.provider == "openai", model.api == "openai-completions" {
+        if model.api == "openai-completions",
+           model.provider == "openai" || model.provider == openAIChatCompletions.rawValue
+        {
             return .openAIChatCompletions
         }
         return allCases.first { $0.modelProviderIDs.contains(model.provider) }
@@ -276,19 +277,22 @@ nonisolated struct BridgeAIProviderConfig: Codable, Equatable, Sendable {
     var baseURL: String
     var oauthExpiresAt: Date?
     var oauthAccountID: String?
+    var modelIDs: [String]?
 
     init(
         isEnabled: Bool = false,
         authMethod: BridgeAIProviderAuthMethod = .oauth,
         baseURL: String = "",
         oauthExpiresAt: Date? = nil,
-        oauthAccountID: String? = nil
+        oauthAccountID: String? = nil,
+        modelIDs: [String]? = nil
     ) {
         self.isEnabled = isEnabled
         self.authMethod = authMethod
         self.baseURL = baseURL
         self.oauthExpiresAt = oauthExpiresAt
         self.oauthAccountID = oauthAccountID
+        self.modelIDs = modelIDs
     }
 
     func resolvedBaseURL(for provider: BridgeAIProvider) -> String? {

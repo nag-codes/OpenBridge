@@ -1,3 +1,4 @@
+import Foundation
 import KWWKAI
 import SwiftUI
 
@@ -9,10 +10,13 @@ struct AIProviderDetailView: View {
     @State private var oauthAccessToken = ""
     @State private var oauthRefreshToken = ""
     @State private var oauthExpiresAt = Date().addingTimeInterval(50 * 60)
+    @State private var modelRows: [AIProviderModelRow]
+    @State private var selectedModelRowIDs: Set<AIProviderModelRow.ID> = []
     @State private var usageSnapshot = BridgeAIProviderUsageSnapshot.unavailable
     @State private var isRefreshingUsage = false
     @State private var isSaving = false
     @State private var isLoggingIn = false
+    @State private var isFetchingModels = false
     @State private var loginAttemptID = 0
     @State private var loginTask: Task<Void, Never>?
     @State private var statusMessage: String?
@@ -20,7 +24,9 @@ struct AIProviderDetailView: View {
 
     init(provider: BridgeAIProvider) {
         self.provider = provider
-        _config = State(initialValue: BridgeAIProviderSettings()[provider])
+        let initialConfig = BridgeAIProviderSettings()[provider]
+        _config = State(initialValue: initialConfig)
+        _modelRows = State(initialValue: Self.modelRows(for: provider, config: initialConfig))
     }
 
     var body: some View {
@@ -36,6 +42,10 @@ struct AIProviderDetailView: View {
                     oauthSection
                 }
 
+                if provider == .openAIChatCompletions {
+                    modelsSection
+                }
+
                 if supportsUsageDisplay {
                     usageSection
                 }
@@ -49,6 +59,7 @@ struct AIProviderDetailView: View {
         .navigationTitle(provider.displayName)
         .task {
             config = await BridgeAIProviderSecretStore.readSettings()[provider]
+            modelRows = Self.modelRows(for: provider, config: config)
             await loadSecrets()
             await refreshUsage()
         }
@@ -153,6 +164,69 @@ struct AIProviderDetailView: View {
 
                 SecureField(provider.apiKeyPlaceholder, text: $apiKey)
                     .textFieldStyle(.roundedBorder)
+            }
+        }
+    }
+
+    private var modelsSection: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Models")
+                            .font(.headline)
+                        Text("Manage model names exposed by this Chat Completions endpoint.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        Task { await fetchModels() }
+                    } label: {
+                        if isFetchingModels {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Fetch Models", systemImage: "arrow.down.circle")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isFetchingModels || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .help("Fetch available models from the endpoint's /v1/models API")
+                }
+
+                Table($modelRows, selection: $selectedModelRowIDs) {
+                    TableColumn("Model Name") { $row in
+                        TextField("Model name", text: $row.name)
+                            .textFieldStyle(.plain)
+                    }
+                }
+                .frame(minHeight: 180)
+
+                HStack(spacing: 8) {
+                    Button {
+                        addModelRow()
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .help("Add model")
+
+                    Button {
+                        removeSelectedModelRows()
+                    } label: {
+                        Image(systemName: "minus")
+                    }
+                    .disabled(selectedModelRowIDs.isEmpty)
+                    .help("Remove selected models")
+
+                    Spacer()
+
+                    Text("\(normalizedModelIDs.count) models")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -417,6 +491,11 @@ struct AIProviderDetailView: View {
                 config.oauthExpiresAt = oauthExpiresAt
             }
 
+            if provider == .openAIChatCompletions {
+                config.modelIDs = normalizedModelIDs
+                modelRows = Self.rows(from: config.modelIDs ?? [])
+            }
+
             config.isEnabled = hasStoredAuth || config.isEnabled
             var settings = await BridgeAIProviderSecretStore.readSettings()
             settings[provider] = config
@@ -516,6 +595,11 @@ struct AIProviderDetailView: View {
             config.isEnabled = false
             config.oauthExpiresAt = nil
             config.oauthAccountID = nil
+            if provider == .openAIChatCompletions {
+                config.modelIDs = nil
+                modelRows = Self.modelRows(for: provider, config: config)
+                selectedModelRowIDs = []
+            }
             usageSnapshot = .unavailable
 
             var settings = await BridgeAIProviderSecretStore.readSettings()
@@ -554,6 +638,143 @@ struct AIProviderDetailView: View {
         isRefreshingUsage = true
         defer { isRefreshingUsage = false }
         usageSnapshot = await BridgeAIProviderUsageService.refresh(provider: provider)
+    }
+
+    private var normalizedModelIDs: [String] {
+        Self.normalizedModelIDs(from: modelRows.map(\.name))
+    }
+
+    private func addModelRow() {
+        let row = AIProviderModelRow(name: "new-model")
+        modelRows.append(row)
+        selectedModelRowIDs = [row.id]
+    }
+
+    private func removeSelectedModelRows() {
+        modelRows.removeAll { selectedModelRowIDs.contains($0.id) }
+        selectedModelRowIDs = []
+    }
+
+    private func fetchModels() async {
+        guard provider == .openAIChatCompletions else { return }
+        let token = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            errorMessage = "Enter an API token before fetching models."
+            return
+        }
+        guard let url = modelListURL else {
+            errorMessage = "Enter a valid endpoint URL."
+            return
+        }
+
+        isFetchingModels = true
+        errorMessage = nil
+        statusMessage = nil
+        defer { isFetchingModels = false }
+
+        do {
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw AIProviderModelFetchError.invalidResponse
+            }
+            guard (200 ..< 300).contains(httpResponse.statusCode) else {
+                throw AIProviderModelFetchError.requestFailed(httpResponse.statusCode)
+            }
+
+            let ids = try Self.decodeFetchedModelIDs(from: data)
+            guard !ids.isEmpty else {
+                throw AIProviderModelFetchError.emptyModelList
+            }
+
+            modelRows = Self.rows(from: ids)
+            selectedModelRowIDs = []
+            statusMessage = "Fetched \(ids.count) models. Save changes to persist them."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private var modelListURL: URL? {
+        var base = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if base.isEmpty {
+            base = provider.defaultBaseURL
+        }
+        while base.hasSuffix("/") {
+            base.removeLast()
+        }
+        let versioned = base.hasSuffix("/v1") ? base : "\(base)/v1"
+        return URL(string: "\(versioned)/models")
+    }
+
+    private static func modelRows(for provider: BridgeAIProvider, config: BridgeAIProviderConfig) -> [AIProviderModelRow] {
+        guard provider == .openAIChatCompletions else { return [] }
+        return rows(from: config.modelIDs ?? [Models.gpt4oMini.id])
+    }
+
+    private static func rows(from modelIDs: [String]) -> [AIProviderModelRow] {
+        normalizedModelIDs(from: modelIDs).map { AIProviderModelRow(name: $0) }
+    }
+
+    private static func normalizedModelIDs(from modelIDs: [String]) -> [String] {
+        modelIDs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .reduce(into: []) { result, id in
+                guard !result.contains(id) else { return }
+                result.append(id)
+            }
+    }
+
+    private static func decodeFetchedModelIDs(from data: Data) throws -> [String] {
+        let json = try JSONSerialization.jsonObject(with: data)
+        let rawIDs: [String] = if let root = json as? [String: Any], let models = root["data"] {
+            extractModelIDs(from: models)
+        } else {
+            extractModelIDs(from: json)
+        }
+        return normalizedModelIDs(from: rawIDs)
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    private static func extractModelIDs(from value: Any) -> [String] {
+        if let strings = value as? [String] {
+            return strings
+        }
+        guard let models = value as? [Any] else { return [] }
+        return models.compactMap { item in
+            if let id = item as? String {
+                return id
+            }
+            guard let object = item as? [String: Any] else { return nil }
+            return object["id"] as? String
+        }
+    }
+}
+
+private struct AIProviderModelRow: Identifiable, Hashable {
+    let id = UUID()
+    var name: String
+}
+
+private enum AIProviderModelFetchError: LocalizedError {
+    case invalidResponse
+    case requestFailed(Int)
+    case emptyModelList
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidResponse:
+            "The models endpoint returned an invalid response."
+        case let .requestFailed(statusCode):
+            "The models endpoint returned HTTP \(statusCode)."
+        case .emptyModelList:
+            "The models endpoint did not return any model IDs."
+        }
     }
 }
 

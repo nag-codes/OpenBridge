@@ -64,27 +64,11 @@ enum BridgeAIProviderRegistry {
     }
 
     static func availableModels() -> [Model] {
-        let supportedAPIs: Set = [
-            "anthropic-messages",
-            "azure-openai-responses",
-            "bedrock-converse-stream",
-            "google-generative-ai",
-            "mistral-conversations",
-            "openai-codex-responses",
-            "openai-completions",
-            "openai-responses",
-        ]
-        return ModelsCatalog.all
-            .filter { supportedAPIs.contains($0.api) }
-            .sorted { lhs, rhs in
-                let left = "\(lhs.provider)/\(lhs.name)"
-                let right = "\(rhs.provider)/\(rhs.name)"
-                return left.localizedStandardCompare(right) == .orderedAscending
-            }
+        sortedModels(catalogModels() + openAIChatCompletionsModels(config: BridgeAIProviderSettings()[.openAIChatCompletions]))
     }
 
     static func availableModels(settings: BridgeAIProviderSettings) -> [Model] {
-        availableModels().filter { model in
+        var models = catalogModels().filter { model in
             guard let provider = BridgeAIProvider.provider(for: model) else { return false }
             let config = settings[provider]
             guard config.isEnabled else { return false }
@@ -98,10 +82,51 @@ enum BridgeAIProviderRegistry {
             }
             return true
         }
+
+        let chatCompletionsConfig = settings[.openAIChatCompletions]
+        if chatCompletionsConfig.isEnabled {
+            models.append(contentsOf: openAIChatCompletionsModels(config: chatCompletionsConfig))
+        }
+
+        return sortedModels(models)
     }
 
     static func displayModel(provider: String, id: String) -> Model? {
-        ModelsCatalog.model(provider: provider, id: id)
+        if provider == BridgeAIProvider.openAIChatCompletions.rawValue {
+            return openAIChatCompletionsModel(
+                id: id,
+                config: BridgeAIProviderSettings()[.openAIChatCompletions]
+            )
+        }
+        return ModelsCatalog.model(provider: provider, id: id)
+    }
+
+    static func displayProviderName(_ provider: String) -> String {
+        BridgeAIProvider.allCases.first { $0.modelProviderIDs.contains(provider) }?.displayName
+            ?? provider
+    }
+
+    private static func catalogModels() -> [Model] {
+        let supportedAPIs: Set = [
+            "anthropic-messages",
+            "azure-openai-responses",
+            "bedrock-converse-stream",
+            "google-generative-ai",
+            "mistral-conversations",
+            "openai-codex-responses",
+            "openai-completions",
+            "openai-responses",
+        ]
+        return ModelsCatalog.all
+            .filter { supportedAPIs.contains($0.api) }
+    }
+
+    private static func sortedModels(_ models: [Model]) -> [Model] {
+        models.sorted { lhs, rhs in
+            let left = "\(lhs.provider)/\(lhs.name)"
+            let right = "\(rhs.provider)/\(rhs.name)"
+            return left.localizedStandardCompare(right) == .orderedAscending
+        }
     }
 
     static func availableModelsByProvider() -> [(provider: String, models: [Model])] {
@@ -159,6 +184,10 @@ enum BridgeAIProviderRegistry {
         id: String,
         settings: BridgeAIProviderSettings
     ) -> Model? {
+        if provider == BridgeAIProvider.openAIChatCompletions.rawValue {
+            return openAIChatCompletionsModel(id: id, config: settings[.openAIChatCompletions])
+        }
+
         let catalogModel = ModelsCatalog.model(provider: provider, id: id)
         if provider == "openai-codex" ||
             (provider == "openai" && catalogModel?.api != "openai-completions" && settings[.openAI].authMethod == .oauth)
@@ -169,6 +198,56 @@ enum BridgeAIProviderRegistry {
             return mistralRuntimeModel(catalogModel)
         }
         return catalogModel
+    }
+
+    private static func openAIChatCompletionsModels(config: BridgeAIProviderConfig) -> [Model] {
+        openAIChatCompletionsModelIDs(config: config).map { id in
+            openAIChatCompletionsModel(id: id, config: config)
+        }
+    }
+
+    private static func openAIChatCompletionsModelIDs(config: BridgeAIProviderConfig) -> [String] {
+        let modelIDs = config.modelIDs ?? [Models.gpt4oMini.id]
+        return modelIDs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .reduce(into: []) { result, id in
+                guard !result.contains(id) else { return }
+                result.append(id)
+            }
+    }
+
+    private static func openAIChatCompletionsModel(
+        id: String,
+        config: BridgeAIProviderConfig
+    ) -> Model {
+        let configuredBaseURL = normalizedBaseURL(config.baseURL)
+        let baseURL = configuredBaseURL.isEmpty
+            ? BridgeAIProvider.openAIChatCompletions.defaultBaseURL
+            : configuredBaseURL
+        let catalog = ModelsCatalog.model(provider: "openai", id: id)
+        let builtin = id == Models.gpt4oMini.id ? Models.gpt4oMini : nil
+        return Model(
+            id: id,
+            name: catalog?.name ?? builtin?.name ?? id,
+            api: "openai-completions",
+            provider: BridgeAIProvider.openAIChatCompletions.rawValue,
+            baseUrl: baseURL,
+            reasoning: catalog?.reasoning ?? builtin?.reasoning ?? false,
+            input: catalog?.input ?? builtin?.input ?? [.text, .image],
+            cost: catalog?.cost ?? builtin?.cost ?? .init(),
+            contextWindow: catalog?.contextWindow ?? builtin?.contextWindow ?? 128_000,
+            maxTokens: catalog?.maxTokens ?? builtin?.maxTokens ?? 16384,
+            headers: catalog?.headers ?? builtin?.headers
+        )
+    }
+
+    private static func normalizedBaseURL(_ baseURL: String) -> String {
+        var trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        while trimmed.hasSuffix("/") {
+            trimmed.removeLast()
+        }
+        return trimmed
     }
 
     private static func mistralRuntimeModel(_ catalog: Model?) -> Model? {

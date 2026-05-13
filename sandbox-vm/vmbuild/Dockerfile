@@ -12,15 +12,12 @@ FROM docker.io/library/debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
     openssh-client \
-    net-tools \
-    dnsutils \
     curl \
     socat \
     iproute2 \
     udhcpc \
     ripgrep \
     fd-find \
-    tree \
     iputils-ping \
     python3 \
     python3-pip \
@@ -28,7 +25,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python-is-python3 \
     file \
     jq \
-    e2fsprogs \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /usr/lib/python*/EXTERNALLY-MANAGED

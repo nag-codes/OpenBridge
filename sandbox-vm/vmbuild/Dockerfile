@@ -13,9 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     net-tools \
     curl \
-    socat \
     iproute2 \
-    udhcpc \
     ripgrep \
     fd-find \
     iputils-ping \

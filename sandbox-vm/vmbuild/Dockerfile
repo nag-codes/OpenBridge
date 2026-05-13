@@ -3,7 +3,7 @@ FROM docker.io/library/golang:1.25-alpine AS builder
 WORKDIR /src
 COPY . .
 RUN go mod download
-RUN CGO_ENABLED=0 go build -o /vmd ./cmd/vmd
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /vmd ./cmd/vmd
 
 # Runtime stage
 FROM docker.io/library/debian:trixie-slim

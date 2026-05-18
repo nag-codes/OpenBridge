@@ -6,7 +6,26 @@ nonisolated enum BridgeAIProviderSecretKind: String, Sendable {
     case oauthRefreshToken
 }
 
+private final nonisolated class BridgeAIProviderStoreURLOverride: @unchecked Sendable {
+    private let lock = NSLock()
+    private var url: URL?
+
+    func set(_ url: URL?) {
+        lock.withLock {
+            self.url = url
+        }
+    }
+
+    func get() -> URL? {
+        lock.withLock {
+            url
+        }
+    }
+}
+
 nonisolated enum BridgeAIProviderSecretStore {
+    private static let storeURLOverride = BridgeAIProviderStoreURLOverride()
+
     private struct StoreFile: Codable {
         var settings = BridgeAIProviderSettings()
         var secrets: [String: String] = [:]
@@ -36,6 +55,7 @@ nonisolated enum BridgeAIProviderSecretStore {
             store.settings = settings
             try saveStore(store)
         }.value
+        await notifyAIProviderStoreDidChange()
     }
 
     static func readSecret(
@@ -64,6 +84,7 @@ nonisolated enum BridgeAIProviderSecretStore {
             store.secrets[account] = trimmed
             try saveStore(store)
         }.value
+        await notifyAIProviderStoreDidChange()
     }
 
     static func hasSecret(
@@ -78,7 +99,17 @@ nonisolated enum BridgeAIProviderSecretStore {
         "\(provider.rawValue).\(kind.rawValue)"
     }
 
+    private static func notifyAIProviderStoreDidChange() async {
+        await MainActor.run {
+            NotificationCenter.default.post(name: .aiProviderSettingsDidChange, object: nil)
+        }
+    }
+
     private static var storeURL: URL {
+        if let override = resolvedStoreURLOverride {
+            return override
+        }
+
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support", isDirectory: true)
@@ -86,6 +117,14 @@ nonisolated enum BridgeAIProviderSecretStore {
             .appendingPathComponent("OpenBridge", isDirectory: true)
             .appendingPathComponent("AI Providers", isDirectory: true)
             .appendingPathComponent("secrets.json", isDirectory: false)
+    }
+
+    static func setStoreURLForTesting(_ url: URL?) {
+        storeURLOverride.set(url)
+    }
+
+    private static var resolvedStoreURLOverride: URL? {
+        storeURLOverride.get()
     }
 
     private static func loadStore() throws -> StoreFile {

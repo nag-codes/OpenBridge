@@ -151,7 +151,17 @@ extension ChatEditorViewModel {
     }
 
     func loadSelectedModel() async {
+        await loadSelectedModel(isCurrentReload: { true })
+    }
+
+    func loadSelectedModelIfCurrent(generation: UInt64) async {
+        await loadSelectedModel(isCurrentReload: { self.isCurrentSelectedModelReload(generation: generation) })
+    }
+
+    private func loadSelectedModel(isCurrentReload: () -> Bool) async {
         var settings = await BridgeAIProviderSecretStore.readSettings()
+        guard isCurrentReload() else { return }
+
         availableModelGroups = BridgeAIProviderRegistry.availableModelsByProvider(settings: settings)
         if settings.selectedModelProvider == "openai",
            settings[.openAI].authMethod == .oauth,
@@ -159,6 +169,7 @@ extension ChatEditorViewModel {
         {
             settings.selectedModelProvider = "openai-codex"
             try? await BridgeAIProviderSecretStore.saveSettings(settings)
+            guard isCurrentReload() else { return }
         }
         availableModelGroups = BridgeAIProviderRegistry.availableModelsByProvider(settings: settings)
         guard hasAvailableModelSelection else {

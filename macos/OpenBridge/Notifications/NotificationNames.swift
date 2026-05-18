@@ -15,6 +15,10 @@ extension Notification.Name {
     static let skillActivationRequested = Notification.Name("skillActivationRequested")
     static let skillInventoryDidChange = Notification.Name("skillInventoryDidChange")
 
+    // MARK: - AI Providers
+
+    static let aiProviderSettingsDidChange = Notification.Name("aiProviderSettingsDidChange")
+
     // MARK: - Shortcuts
 
     static let keyboardShortcutsShortcutDidChange = Notification.Name("KeyboardShortcuts_shortcutByNameDidChange")

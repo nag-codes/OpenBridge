@@ -66,6 +66,12 @@ final class ChatEditorViewModel {
     var voicePendingWaveformPeak: Double = 0
     @ObservationIgnored
     private var quoteFocusRequestCounter: Int = 0
+    @ObservationIgnored
+    private var aiProviderSettingsCancellable: AnyCancellable?
+    @ObservationIgnored
+    private var aiProviderSettingsReloadTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var aiProviderSettingsReloadGeneration: UInt64 = 0
 
     /// Skill selected for the current conversation (delegated to Chat)
     var selectedSkill: Skill? {
@@ -125,7 +131,30 @@ final class ChatEditorViewModel {
         text: String = ""
     ) {
         self.text = text
-        Task { await loadSelectedModel() }
+        setupAIProviderSettingsObservation()
+        scheduleSelectedModelReload()
+    }
+
+    private func setupAIProviderSettingsObservation() {
+        aiProviderSettingsCancellable = NotificationCenter.default
+            .publisher(for: .aiProviderSettingsDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.scheduleSelectedModelReload()
+            }
+    }
+
+    private func scheduleSelectedModelReload() {
+        aiProviderSettingsReloadGeneration += 1
+        let generation = aiProviderSettingsReloadGeneration
+        aiProviderSettingsReloadTask?.cancel()
+        aiProviderSettingsReloadTask = Task { [weak self] in
+            await self?.loadSelectedModelIfCurrent(generation: generation)
+        }
+    }
+
+    func isCurrentSelectedModelReload(generation: UInt64) -> Bool {
+        !Task.isCancelled && generation == aiProviderSettingsReloadGeneration
     }
 
     // MARK: - State Helpers

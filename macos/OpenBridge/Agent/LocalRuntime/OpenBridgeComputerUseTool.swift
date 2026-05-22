@@ -45,7 +45,7 @@ enum OpenBridgeComputerUseAgent {
     Use the startup inventory below to choose app names, bundle ids, and window_title values.
     Call start before the first Computer Use action for a user request, and call end when you are done operating local macOS apps.
     Use open-app when the target app is installed but not running.
-    Begin by calling get-app-state every turn you want to use Computer Use; it returns app_state and snapshot_id for subsequent actions.
+    Begin by calling get-app-state every turn you want to use Computer Use; follow-up actions operate on the latest captured app state.
     After navigation changes a window title, omit window_title unless the user explicitly asked for a specific window.
     Computer Use actions run in the background; avoid disrupting the user's active app, clipboard, or foreground workflow.
     Prefer accessibility: call get-app-state with include_screenshot=false first, and use element_index whenever possible.
@@ -82,20 +82,20 @@ enum OpenBridgeComputerUseAgent {
             - list-apps: args {}; returns currently running apps plus apps used in the last 14 days, with frontmost/running/last-used/uses flags when available
             - open-app: args {"app": string}; launches an app by name, bundle id, or .app path if needed, without activating it, and returns the app-list line for the app
             - list-windows: args {"app": string}
-            - get-app-state: args {"app": string, "window_title"?: string, "include_screenshot"?: boolean}; returns app_state and snapshot_id; default include_screenshot=false
-            - click: args {"snapshot_id": string, "element_index"?: integer, "x"?: number, "y"?: number, "include_screenshot_after"?: boolean}; use element_index or x/y
-            - type-text: args {"snapshot_id": string, "text": string, "element_index"?: integer, "include_screenshot_after"?: boolean}
-            - set-value: args {"snapshot_id": string, "element_index": integer, "value": string, "include_screenshot_after"?: boolean}
-            - press-key: args {"snapshot_id": string, "key": string, "include_screenshot_after"?: boolean}
-            - scroll: args {"snapshot_id": string, "element_index": integer, "direction": "up"|"down"|"left"|"right", "pages"?: number, "include_screenshot_after"?: boolean}; pages is a viewport-relative amount and supports fractions
-            - perform-secondary-action: args {"snapshot_id": string, "element_index": integer, "action": string, "include_screenshot_after"?: boolean}
-            - drag: args {"snapshot_id": string, "from_x": number, "from_y": number, "to_x": number, "to_y": number, "include_screenshot_after"?: boolean}
+            - get-app-state: args {"app": string, "window_title"?: string, "include_screenshot"?: boolean}; returns app_state and records the latest snapshot; default include_screenshot=false
+            - click: args {"element_index"?: integer, "x"?: number, "y"?: number, "include_screenshot_after"?: boolean}; use element_index or x/y from the latest snapshot
+            - type-text: args {"text": string, "element_index"?: integer, "include_screenshot_after"?: boolean}
+            - set-value: args {"element_index": integer, "value": string, "include_screenshot_after"?: boolean}
+            - press-key: args {"key": string, "include_screenshot_after"?: boolean}
+            - scroll: args {"element_index": integer, "direction": "up"|"down"|"left"|"right", "pages"?: number, "include_screenshot_after"?: boolean}; pages is a viewport-relative amount and supports fractions
+            - perform-secondary-action: args {"element_index": integer, "action": string, "include_screenshot_after"?: boolean}
+            - drag: args {"from_x": number, "from_y": number, "to_x": number, "to_y": number, "include_screenshot_after"?: boolean}
 
             Examples:
             - {"action":"start","args":{"apps":["Slack"]}}
             - {"action":"get-app-state","args":{"app":"Slack","window_title":"Slack","include_screenshot":false}}
-            - {"action":"click","args":{"snapshot_id":"...","element_index":12}}
-            - {"action":"type-text","args":{"snapshot_id":"...","text":"hello"}}
+            - {"action":"click","args":{"element_index":12}}
+            - {"action":"type-text","args":{"text":"hello"}}
             - {"action":"end","args":{}}
             """,
             parameters: [
@@ -215,44 +215,37 @@ enum OpenBridgeComputerUseAgent {
                 includeScreenshot: optionalBool(args, "include_screenshot") ?? false
             )
         case "click":
-            let snapshotID = try requiredString(args, "snapshot_id")
             let includeScreenshotAfter = optionalBool(args, "include_screenshot_after") ?? false
             if let elementIndex = optionalInt(args, "element_index") {
                 return try await client.click(
-                    snapshotID: snapshotID,
                     elementIndex: elementIndex,
                     includeScreenshotAfter: includeScreenshotAfter
                 )
             }
             return try await client.click(
-                snapshotID: snapshotID,
                 x: requiredDouble(args, "x"),
                 y: requiredDouble(args, "y"),
                 includeScreenshotAfter: includeScreenshotAfter
             )
         case "type-text":
             return try await client.typeText(
-                snapshotID: requiredString(args, "snapshot_id"),
                 text: requiredString(args, "text"),
                 elementIndex: optionalInt(args, "element_index"),
                 includeScreenshotAfter: optionalBool(args, "include_screenshot_after") ?? false
             )
         case "set-value":
             return try await client.setValue(
-                snapshotID: requiredString(args, "snapshot_id"),
                 elementIndex: requiredInt(args, "element_index"),
                 value: requiredString(args, "value"),
                 includeScreenshotAfter: optionalBool(args, "include_screenshot_after") ?? false
             )
         case "press-key":
             return try await client.pressKey(
-                snapshotID: requiredString(args, "snapshot_id"),
                 key: requiredString(args, "key"),
                 includeScreenshotAfter: optionalBool(args, "include_screenshot_after") ?? false
             )
         case "scroll":
             return try await client.scroll(
-                snapshotID: requiredString(args, "snapshot_id"),
                 elementIndex: requiredInt(args, "element_index"),
                 direction: requiredString(args, "direction"),
                 pages: optionalDouble(args, "pages") ?? 1,
@@ -260,14 +253,12 @@ enum OpenBridgeComputerUseAgent {
             )
         case "perform-secondary-action":
             return try await client.performSecondaryAction(
-                snapshotID: requiredString(args, "snapshot_id"),
                 elementIndex: requiredInt(args, "element_index"),
                 action: requiredString(args, "action"),
                 includeScreenshotAfter: optionalBool(args, "include_screenshot_after") ?? false
             )
         case "drag":
             return try await client.drag(
-                snapshotID: requiredString(args, "snapshot_id"),
                 fromX: requiredDouble(args, "from_x"),
                 fromY: requiredDouble(args, "from_y"),
                 toX: requiredDouble(args, "to_x"),
@@ -328,8 +319,8 @@ enum OpenBridgeComputerUseAgent {
         - {"action":"open-app","args":{"app":"Slack"}}
         - {"action":"list-windows","args":{"app":"Slack"}}
         - {"action":"get-app-state","args":{"app":"Slack","include_screenshot":false}}
-        - {"action":"click","args":{"snapshot_id":"...","element_index":12}}
-        - {"action":"press-key","args":{"snapshot_id":"...","key":"cmd+f"}}
+        - {"action":"click","args":{"element_index":12}}
+        - {"action":"press-key","args":{"key":"cmd+f"}}
         - {"action":"end","args":{}}
         """
     }

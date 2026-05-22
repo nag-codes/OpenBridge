@@ -1365,8 +1365,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/EYHN/kwwk-computer-use-core.git";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.1.0;
+				kind = revision;
+				revision = 36126dc0203f9d884e3b944f2fb2128df08d671e;
 			};
 		};
 		E9FA07252EA8A45E0092CF4C /* XCRemoteSwiftPackageReference "LaunchAtLogin-Modern" */ = {
